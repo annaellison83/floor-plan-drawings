@@ -20,6 +20,17 @@ function clean(value) {
   return String(value).trim();
 }
 
+function cleanEnv(value) {
+  return clean(value).replace(/^=\s*/, "").trim();
+}
+
+function cleanAirtableToken(value) {
+  return cleanEnv(value)
+    .replace(/^Bearer\s+/i, "")
+    .replace(/^["']|["']$/g, "")
+    .trim();
+}
+
 function compactLines(lines) {
   return lines.filter(Boolean).join("\n");
 }
@@ -111,9 +122,9 @@ exports.handler = async (event) => {
     return json(405, { ok: false, error: "Method not allowed" });
   }
 
-  const token = process.env.AIRTABLE_TOKEN;
-  const baseId = process.env.AIRTABLE_BASE_ID;
-  const tableName = process.env.AIRTABLE_JOBS_TABLE || "Jobs";
+  const token = cleanAirtableToken(process.env.AIRTABLE_TOKEN);
+  const baseId = cleanEnv(process.env.AIRTABLE_BASE_ID);
+  const tableName = cleanEnv(process.env.AIRTABLE_JOBS_TABLE) || "Jobs";
 
   if (!token || !baseId) {
     return json(500, {
