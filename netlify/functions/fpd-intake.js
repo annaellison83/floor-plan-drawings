@@ -41,6 +41,8 @@ function summarizePayload(data, workflow, status) {
     status,
     address: clean(data.address),
     city: clean(data.city),
+    googlePlaceId: clean(data.googlePlaceId),
+    mapQuery: clean(data.mapQuery),
     approxSqFt: clean(data.approxSqFt),
     buildingType: clean(data.buildingType),
     planType: clean(data.planType),
