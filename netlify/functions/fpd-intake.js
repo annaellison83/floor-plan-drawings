@@ -113,6 +113,55 @@ async function maybeNotify(url, payload) {
   }
 }
 
+function unknownFieldName(errorBody) {
+  const message = errorBody && errorBody.error && errorBody.error.message;
+  if (!message) return "";
+
+  const match = String(message).match(/Unknown field name: "([^"]+)"/);
+  return match ? match[1] : "";
+}
+
+async function createAirtableRecord(airtableUrl, token, fields) {
+  const remainingFields = { ...fields };
+  const omittedFields = [];
+
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const airtableResponse = await fetch(airtableUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ fields: remainingFields, typecast: true })
+    });
+
+    const airtableBody = await airtableResponse.json().catch(() => ({}));
+
+    if (airtableResponse.ok) {
+      return { airtableBody, omittedFields };
+    }
+
+    const fieldName = unknownFieldName(airtableBody);
+    if (!fieldName || !(fieldName in remainingFields)) {
+      return { airtableBody, omittedFields, error: true };
+    }
+
+    omittedFields.push(fieldName);
+    delete remainingFields[fieldName];
+  }
+
+  return {
+    error: true,
+    omittedFields,
+    airtableBody: {
+      error: {
+        type: "FIELD_RETRY_LIMIT",
+        message: "Too many Airtable fields were missing from the target table."
+      }
+    }
+  };
+}
+
 exports.handler = async (event) => {
   if (event.httpMethod === "OPTIONS") {
     return { statusCode: 204, headers: corsHeaders, body: "" };
@@ -147,18 +196,9 @@ exports.handler = async (event) => {
   }
 
   const airtableUrl = `${AIRTABLE_API_URL}/${baseId}/${encodeURIComponent(tableName)}`;
-  const airtableResponse = await fetch(airtableUrl, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({ fields, typecast: true })
-  });
+  const { airtableBody, omittedFields, error } = await createAirtableRecord(airtableUrl, token, fields);
 
-  const airtableBody = await airtableResponse.json().catch(() => ({}));
-
-  if (!airtableResponse.ok) {
+  if (error) {
     return json(502, {
       ok: false,
       error: "Airtable create failed",
@@ -177,6 +217,7 @@ exports.handler = async (event) => {
     ok: true,
     id: airtableBody.id,
     status: fields.Status,
-    address: fields["Property Address"]
+    address: fields["Property Address"],
+    omittedFields
   });
 };
