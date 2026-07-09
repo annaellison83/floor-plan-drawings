@@ -35,11 +35,85 @@ function compactLines(lines) {
   return lines.filter(Boolean).join("\n");
 }
 
+function compactInline(parts) {
+  return parts.filter(Boolean).join(" | ");
+}
+
+function missingInfo(data, workflow) {
+  const missing = [];
+  if (!clean(data.name)) missing.push("client name");
+  if (!clean(data.email)) missing.push("email");
+  if (!clean(data.phone)) missing.push("phone");
+  if (!clean(data.approxSqFt)) missing.push("square footage");
+  if (!clean(data.buildingType)) missing.push("building type");
+  if (!clean(data.planType)) missing.push("plan purpose");
+  if (workflow === "Order" && !clean(data.access)) missing.push("access");
+  if (workflow === "Order" && !clean(data.appointment)) missing.push("appointment timing");
+  return missing;
+}
+
+function inferFlags(data) {
+  const text = [
+    data.address,
+    data.addressDetail,
+    data.buildingType,
+    data.planType,
+    data.exteriorInclusions,
+    data.notes,
+    data.access
+  ].map(clean).join(" ").toLowerCase();
+
+  const flags = [];
+  if (/\b(duplex|triplex|fourplex|apartment|apartments|multi[-\s]?unit|multifamily|multi family)\b/.test(text)) {
+    flags.push("multi-unit/apartment building");
+  }
+  if (/\b(commercial|retail|office|warehouse|tenant|suite|unit\s+\w+)\b/.test(text)) {
+    flags.push("commercial or suite/tenant space");
+  }
+  if (/\b(upstairs|downstairs|rear|front|back house|guest house|adu|main house|unit|suite|floor|level|partial)\b/.test(text)) {
+    flags.push("scope may be partial or sub-address specific");
+  }
+  if (/\b(tic|tenancy|condo|hoa|legal|attorney|estate|probate)\b/.test(text)) {
+    flags.push("may need special-use/legal-style plan");
+  }
+  if (/\b(asap|urgent|today|tomorrow|rush|this week|photo|photos|listing|mls|marketing)\b/.test(text)) {
+    flags.push("marketing/timing-sensitive");
+  }
+  return flags;
+}
+
+function buildAiSummary(data, workflow, status) {
+  const missing = missingInfo(data, workflow);
+  const flags = inferFlags(data);
+  const contact = compactInline([
+    clean(data.name) && `Name: ${clean(data.name)}`,
+    clean(data.email) && `Email: ${clean(data.email)}`,
+    clean(data.phone) && `Phone: ${clean(data.phone)}`,
+    clean(data.role) && `Role: ${clean(data.role)}`
+  ]);
+
+  return compactLines([
+    `${workflow} from website - ${status}`,
+    contact && `Contact: ${contact}`,
+    clean(data.addressDetail) && `Unit / suite / scope detail: ${clean(data.addressDetail)}`,
+    clean(data.notes) && `Client note: ${clean(data.notes)}`,
+    clean(data.drawingStyleLabel || data.drawingStyle) && `Requested drawing: ${clean(data.drawingStyleLabel || data.drawingStyle)}`,
+    clean(data.tour3d) && `3D tour: ${clean(data.tour3d)}`,
+    clean(data.exteriorInclusions) && `Exterior/site notes: ${clean(data.exteriorInclusions)}`,
+    clean(data.appointment) && `Timing: ${clean(data.appointment)}`,
+    clean(data.access) && `Access: ${clean(data.access)}`,
+    clean(data.parking) && `Parking: ${clean(data.parking)}`,
+    flags.length && `Possible flags: ${flags.join(", ")}`,
+    missing.length && `Missing info: ${missing.join(", ")}`
+  ]);
+}
+
 function summarizePayload(data, workflow, status) {
   return {
     workflow,
     status,
     address: clean(data.address),
+    addressDetail: clean(data.addressDetail),
     city: clean(data.city),
     googlePlaceId: clean(data.googlePlaceId),
     mapQuery: clean(data.mapQuery),
@@ -68,13 +142,15 @@ function buildAirtableFields(data) {
   const workflow = clean(data.workflow) || (/order/i.test(request) ? "Order" : "Quick Quote");
   const status = clean(data.status) || (workflow === "Order" ? "Needs Scheduling" : "Needs Quote");
   const address = clean(data.address);
+  const addressDetail = clean(data.addressDetail);
   const city = clean(data.city);
   const summary = summarizePayload(data, workflow, status);
+  const aiSummary = buildAiSummary(data, workflow, status);
 
   return {
     "Job ID": `WEB-${Date.now()}`,
     Status: status,
-    "Client Name": clean(data.name),
+    "Client Name": clean(data.name) || clean(data.email) || clean(data.phone) || "Website Lead",
     "Client Phone": clean(data.phone),
     "Client Email": clean(data.email),
     "Property Address": city ? `${address}, ${city}` : address,
@@ -83,16 +159,21 @@ function buildAirtableFields(data) {
     "Property Type": clean(data.buildingType),
     Purpose: clean(data.planType),
     Scope: compactLines([
+      addressDetail && `Unit / suite / scope detail: ${addressDetail}`,
       clean(data.drawingStyleLabel || data.drawingStyle) && `Plan: ${clean(data.drawingStyleLabel || data.drawingStyle)}`,
       clean(data.tour3d) && `3D tour: ${clean(data.tour3d)}`,
       clean(data.exteriorInclusions) && `Exterior: ${clean(data.exteriorInclusions)}`,
-      clean(data.appointment) && `Appointment preference: ${clean(data.appointment)}`
+      clean(data.appointment) && `Appointment preference: ${clean(data.appointment)}`,
+      clean(data.notes) && `Client note: ${clean(data.notes)}`
     ]),
     "Access Info": compactLines([
       clean(data.access),
       clean(data.parking) && `Parking: ${clean(data.parking)}`,
       clean(data.dayOfContact) && `Day-of contact: ${clean(data.dayOfContact)}`
     ]),
+    "AI Summary": aiSummary,
+    "Client Notes": clean(data.notes),
+    "Unit / Suite / Scope Detail": addressDetail,
     "Original Request": JSON.stringify(summary, null, 2),
     "Internal Notes": compactLines([
       `Source: Website ${workflow}`,
@@ -127,7 +208,7 @@ async function createAirtableRecord(airtableUrl, token, fields) {
   const remainingFields = { ...fields };
   const omittedFields = [];
 
-  for (let attempt = 0; attempt < 12; attempt += 1) {
+  for (let attempt = 0; attempt < 24; attempt += 1) {
     const airtableResponse = await fetch(airtableUrl, {
       method: "POST",
       headers: {
