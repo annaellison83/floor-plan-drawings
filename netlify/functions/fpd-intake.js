@@ -82,6 +82,31 @@ function inferFlags(data) {
   return flags;
 }
 
+function airtableComplexityFlags(data) {
+  const flags = inferFlags(data);
+  const mapped = [];
+
+  flags.forEach((flag) => {
+    if (/multi-unit|apartment/i.test(flag)) {
+      mapped.push("Multi-unit", "Apartment building");
+    }
+    if (/commercial|suite|tenant/i.test(flag)) {
+      mapped.push("Commercial or suite/tenant space");
+    }
+    if (/partial|sub-address/i.test(flag)) {
+      mapped.push("Partial scope/sub-address", "Scope unclear");
+    }
+    if (/special-use|legal/i.test(flag)) {
+      mapped.push("Scope unclear");
+    }
+    if (/marketing|timing/i.test(flag)) {
+      mapped.push("Marketing/timing-sensitive");
+    }
+  });
+
+  return [...new Set(mapped)];
+}
+
 function buildAiSummary(data, workflow, status) {
   const missing = missingInfo(data, workflow);
   const flags = inferFlags(data);
@@ -146,18 +171,27 @@ function buildAirtableFields(data) {
   const city = clean(data.city);
   const summary = summarizePayload(data, workflow, status);
   const aiSummary = buildAiSummary(data, workflow, status);
+  const missing = missingInfo(data, workflow);
+  const complexityFlags = airtableComplexityFlags(data);
 
   return {
     "Job ID": `WEB-${Date.now()}`,
     Status: status,
+    "Website Workflow": workflow,
+    "Request Type": request,
     "Client Name": clean(data.name) || clean(data.email) || clean(data.phone) || "Website Lead",
     "Client Phone": clean(data.phone),
     "Client Email": clean(data.email),
     "Property Address": city ? `${address}, ${city}` : address,
     City: city,
+    State: city || address ? "CA" : "",
     "Approx Sq Ft": clean(data.approxSqFt),
     "Property Type": clean(data.buildingType),
     Purpose: clean(data.planType),
+    "Drawing Style": clean(data.drawingStyleLabel || data.drawingStyle),
+    "3D Tour Requested": clean(data.tour3d),
+    "Google Place ID": clean(data.googlePlaceId),
+    "Map Query": clean(data.mapQuery),
     Scope: compactLines([
       addressDetail && `Unit / suite / scope detail: ${addressDetail}`,
       clean(data.drawingStyleLabel || data.drawingStyle) && `Plan: ${clean(data.drawingStyleLabel || data.drawingStyle)}`,
@@ -172,9 +206,17 @@ function buildAirtableFields(data) {
       clean(data.dayOfContact) && `Day-of contact: ${clean(data.dayOfContact)}`
     ]),
     "AI Summary": aiSummary,
+    "Missing Info": missing.join(", "),
+    "Complexity Flags": complexityFlags,
     "Client Notes": clean(data.notes),
     "Unit / Suite / Scope Detail": addressDetail,
     "Original Request": JSON.stringify(summary, null, 2),
+    "Property Check Status": "Not Checked",
+    "LA City Match Status": "Not Checked",
+    "Access Status": workflow === "Order" ? "Requested" : "Not Requested",
+    "Drawing Status": "Not Started",
+    "Invoice Status": "Not Invoiced",
+    "Payment Status": "Unpaid",
     "Internal Notes": compactLines([
       `Source: Website ${workflow}`,
       clean(data.notes) && `Client notes: ${clean(data.notes)}`
