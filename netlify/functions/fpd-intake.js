@@ -67,7 +67,7 @@ function inferFlags(data) {
   if (/\b(duplex|triplex|fourplex|apartment|apartments|multi[-\s]?unit|multifamily|multi family)\b/.test(text)) {
     flags.push("multi-unit/apartment building");
   }
-  if (/\b(commercial|retail|office|warehouse|tenant|suite|unit\s+\w+)\b/.test(text)) {
+  if (/\b(commercial|retail|office|warehouse|tenant|suite)\b/.test(text)) {
     flags.push("commercial or suite/tenant space");
   }
   if (/\b(upstairs|downstairs|rear|front|back house|guest house|adu|main house|unit|suite|floor|level|partial)\b/.test(text)) {
