@@ -1,4 +1,5 @@
 const AIRTABLE_API_URL = "https://api.airtable.com/v0";
+const { researchAddress, buildUpdateFields } = require("./property-research");
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -291,6 +292,59 @@ async function createAirtableRecord(airtableUrl, token, fields) {
   };
 }
 
+async function updateAirtableRecord(recordUrl, token, fields) {
+  const response = await fetch(recordUrl, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ fields, typecast: true })
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error((body.error && body.error.message) || `Airtable update failed with status ${response.status}`);
+  }
+  return body;
+}
+
+async function enrichCreatedRecord(recordUrl, token, fields, workflow) {
+  try {
+    const research = await researchAddress(fields["Property Address"]);
+    const researchFields = buildUpdateFields(research, fields);
+    const finalFields = {
+      ...researchFields,
+      "Property Research Complete": true,
+      "Anna Email Status": "Not Sent"
+    };
+
+    if (workflow === "Quick Quote" && research.ok) {
+      finalFields["Quote Review"] = "Ready for Anna";
+    }
+
+    await updateAirtableRecord(recordUrl, token, finalFields);
+    return { ok: true, research };
+  } catch (error) {
+    console.error("Property research during intake failed", error.message);
+
+    const fallbackFields = {
+      "Property Check Status": "Needs Manual Review",
+      "LA City Match Status": "Needs Manual Review",
+      "Property Research Complete": true,
+      "Anna Email Status": "Not Sent",
+      "Quote Calculation Notes": `[Property research ${new Date().toISOString()}] Research service failed; manual property review is required before relying on property data.`
+    };
+
+    try {
+      await updateAirtableRecord(recordUrl, token, fallbackFields);
+    } catch (updateError) {
+      console.error("Property research fallback update failed", updateError.message);
+    }
+
+    return { ok: false, error: error.message };
+  }
+}
+
 exports.handler = async (event) => {
   if (event.httpMethod === "OPTIONS") {
     return { statusCode: 204, headers: corsHeaders, body: "" };
@@ -335,6 +389,14 @@ exports.handler = async (event) => {
     });
   }
 
+  const recordUrl = `${airtableUrl}/${encodeURIComponent(airtableBody.id)}`;
+  const enrichment = await enrichCreatedRecord(
+    recordUrl,
+    token,
+    fields,
+    clean(fields["Website Workflow"])
+  );
+
   await maybeNotify(process.env.NOTIFY_WEBHOOK_URL, {
     text: `New ${data.workflow || data.request || "website request"}: ${fields["Property Address"]}`,
     recordId: airtableBody.id,
@@ -347,6 +409,7 @@ exports.handler = async (event) => {
     id: airtableBody.id,
     status: fields.Status,
     address: fields["Property Address"],
-    omittedFields
+    omittedFields,
+    propertyResearch: enrichment.ok ? enrichment.research.status : "Needs Manual Review"
   });
 };

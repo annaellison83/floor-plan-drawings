@@ -79,8 +79,13 @@ function buildCamsQueryUrl(address) {
   return `${CAMS_QUERY_URL}?${params.toString()}`;
 }
 
-async function fetchJson(url, options) {
-  const response = await fetch(url, options);
+async function fetchJson(url, options = {}) {
+  const requestOptions = { ...options };
+  if (!requestOptions.signal && typeof AbortSignal !== "undefined" && AbortSignal.timeout) {
+    requestOptions.signal = AbortSignal.timeout(8000);
+  }
+
+  const response = await fetch(url, requestOptions);
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
     const message = body && body.error && body.error.message;
@@ -310,7 +315,8 @@ function buildUpdateFields(research, existingFields) {
   const baseFields = {
     "Property Check Status": research.status,
     "Property Data Source URL": research.sourceUrl || "",
-    "Quote Calculation Notes": [currentNotes, note].filter(Boolean).join("\n\n")
+    "Quote Calculation Notes": [currentNotes, note].filter(Boolean).join("\n\n"),
+    "Property Research Complete": true
   };
 
   if (!research.ok) {
@@ -459,3 +465,6 @@ exports.handler = async (event) => {
     return json(502, { ok: false, error: "Property research preview failed" });
   }
 };
+
+exports.researchAddress = researchAddress;
+exports.buildUpdateFields = buildUpdateFields;
