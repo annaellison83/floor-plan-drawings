@@ -213,6 +213,7 @@ function buildAirtableFields(data) {
     "Original Request": JSON.stringify(summary, null, 2),
     "Property Check Status": "Not Checked",
     "LA City Match Status": "Not Checked",
+    "Anna Email Status": "Not Sent",
     ...(workflow === "Quick Quote" ? { "Quote Review": "Not Started" } : {}),
     "Access Status": workflow === "Order" ? "Requested" : "Not Requested",
     "Drawing Status": "Not Started",
