@@ -134,7 +134,7 @@ function buildAerialUrl(x, y) {
 }
 
 function buildMarkedAerialUrl(location) {
-  const key = cleanEnv(process.env.GOOGLE_MAPS_STATIC_KEY || process.env.GOOGLE_MAPS_BROWSER_KEY);
+  const key = cleanEnv(process.env.GOOGLE_MAPS_STATIC_KEY);
   if (!key || !location) return "";
 
   const point = `${location.lat},${location.lon}`;
