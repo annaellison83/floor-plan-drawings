@@ -6,12 +6,13 @@
 
 - Searches the public LA County CAMS address-point layer.
 - Returns a possible AIN/APN candidate and the LA area label.
+- Adds ZIMAS PIN, parcel area, and zoning when the point lands cleanly on one City of Los Angeles parcel.
 - Generates a public LARIAC aerial preview URL.
 - Estimates straight-line miles from North Hollywood and Monterey Park.
 - Marks uncertain or missing matches for manual review.
 - Never fills square footage or quote amounts.
 
-The address lookup uses [CAMS address points](https://arcgis.gis.lacounty.gov/arcgis/rest/services/LACounty_Dynamic/CAMS/MapServer/1). The aerial preview uses Esri's public [World Imagery MapServer](https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer), which is more dependable for a small preview image than the county's current dynamic raster export.
+The address lookup uses [CAMS address points](https://arcgis.gis.lacounty.gov/arcgis/rest/services/LACounty_Dynamic/CAMS/MapServer/1). Parcel and zoning context comes from the [ZIMAS landbase service](https://zimas.lacity.org/arcgis/rest/services/zma/zimas/MapServer/105) and [ZIMAS zoning service](https://zimas.lacity.org/arcgis/rest/services/zma/zimas/MapServer/1102). The aerial preview uses Esri's public [World Imagery MapServer](https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer), which is more dependable for a small preview image than the county's current dynamic raster export.
 
 ## Read-only preview
 
@@ -50,6 +51,8 @@ The helper currently leaves these alone until the property is reviewed:
 - `Quote Zone`
 - `Zone Fee`
 - `Multi-Unit Fee`
+
+`Lot Size` is parcel area from ZIMAS. It is not the building's livable square footage and must not be used as the quote size.
 
 ## Next wiring step
 

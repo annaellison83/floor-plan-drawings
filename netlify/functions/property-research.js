@@ -1,6 +1,8 @@
 const AIRTABLE_API_URL = "https://api.airtable.com/v0";
 const CAMS_QUERY_URL = "https://arcgis.gis.lacounty.gov/arcgis/rest/services/LACounty_Dynamic/CAMS/MapServer/1/query";
 const AERIAL_EXPORT_URL = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export";
+const ZIMAS_LANDBASE_QUERY_URL = "https://zimas.lacity.org/arcgis/rest/services/zma/zimas/MapServer/105/query";
+const ZIMAS_ZONING_QUERY_URL = "https://zimas.lacity.org/arcgis/rest/services/zma/zimas/MapServer/1102/query";
 const NORTH_HOLLYWOOD = { lat: 34.187, lon: -118.3813 };
 const MONTEREY_PARK = { lat: 34.0625, lon: -118.1228 };
 
@@ -125,6 +127,20 @@ function buildAerialUrl(x, y) {
   return `${AERIAL_EXPORT_URL}?${params.toString()}`;
 }
 
+function buildZimasPointQueryUrl(endpoint, x, y, outFields) {
+  const params = new URLSearchParams({
+    geometry: `${x},${y}`,
+    geometryType: "esriGeometryPoint",
+    inSR: "3857",
+    spatialRel: "esriSpatialRelIntersects",
+    outFields,
+    returnGeometry: "false",
+    resultRecordCount: "5",
+    f: "json"
+  });
+  return `${endpoint}?${params.toString()}`;
+}
+
 function uniqueCandidates(features) {
   const byKey = new Map();
   (features || []).forEach((feature) => {
@@ -145,6 +161,43 @@ function getArea(attributes) {
     attributes.PostComm2,
     attributes.PostComm3
   ].map(clean).find(Boolean) || "";
+}
+
+async function lookupZimas(x, y) {
+  const landbaseUrl = buildZimasPointQueryUrl(
+    ZIMAS_LANDBASE_QUERY_URL,
+    x,
+    y,
+    "PIN,PIND,BPP,BOOK,PAGE,PARCEL,Shape_Area"
+  );
+  const zoningUrl = buildZimasPointQueryUrl(
+    ZIMAS_ZONING_QUERY_URL,
+    x,
+    y,
+    "ZONE_CMPLT,ZONE_CLASS,ZONELEGEND"
+  );
+
+  const [landbaseResult, zoningResult] = await Promise.all([
+    fetchJson(landbaseUrl),
+    fetchJson(zoningUrl)
+  ]);
+  const parcels = (landbaseResult.features || []).map((feature) => feature.attributes || {});
+  const zones = (zoningResult.features || []).map((feature) => feature.attributes || {});
+
+  return {
+    status: parcels.length === 1 ? "Matched" : parcels.length > 1 ? "Needs Manual Review" : "No Match",
+    sourceUrl: landbaseUrl,
+    parcel: parcels.length === 1 ? {
+      pin: clean(parcels[0].PIN),
+      apn: clean(parcels[0].BPP),
+      lotSizeSqFt: Number.isFinite(Number(parcels[0].Shape_Area))
+        ? Math.round(Number(parcels[0].Shape_Area))
+        : null
+    } : null,
+    zoning: zones.length ? clean(zones[0].ZONE_CMPLT) : "",
+    zoneSourceUrl: zoningUrl,
+    parcelCount: parcels.length
+  };
 }
 
 function addFlags(existing, additions) {
@@ -203,6 +256,14 @@ async function researchAddress(address) {
     : null;
   const area = getArea(attributes);
   const insideLaCity = /\blos angeles\b/i.test(area);
+  let zimas = null;
+  if (Number.isFinite(x) && Number.isFinite(y)) {
+    try {
+      zimas = await lookupZimas(x, y);
+    } catch (error) {
+      console.warn("ZIMAS lookup failed", error.message);
+    }
+  }
 
   return {
     ok: true,
@@ -219,7 +280,8 @@ async function researchAddress(address) {
     },
     milesFromNorthHollywood: location ? roundMiles(milesBetween(location, NORTH_HOLLYWOOD)) : null,
     milesFromMontereyPark: location ? roundMiles(milesBetween(location, MONTEREY_PARK)) : null,
-    laCityMatch: insideLaCity ? "Matched" : "Needs Manual Review"
+    laCityMatch: insideLaCity ? "Matched" : "Needs Manual Review",
+    zimas
   };
 }
 
@@ -234,9 +296,11 @@ function researchNote(research) {
     `[Property research ${timestamp}] Possible public GIS match: ${candidate.fullAddress || research.address}`,
     candidate.ain && `AIN/APN candidate: ${candidate.ain}`,
     candidate.area && `LA area: ${candidate.area}`,
+    research.zimas && research.zimas.parcel && `ZIMAS PIN: ${research.zimas.parcel.pin || "not provided"}`,
+    research.zimas && research.zimas.zoning && `ZIMAS zoning: ${research.zimas.zoning}`,
     research.milesFromNorthHollywood !== null && `Approx. miles from North Hollywood: ${research.milesFromNorthHollywood}`,
     research.milesFromMontereyPark !== null && `Approx. miles from Monterey Park: ${research.milesFromMontereyPark}`,
-    "This is an address-point match, not a final parcel or unit confirmation. Review duplexes, apartments, suites, and unusual sub-addresses manually."
+    "Review duplexes, apartments, suites, and unusual sub-addresses manually even when ZIMAS returns one parcel."
   ].filter(Boolean).join("\n");
 }
 
@@ -258,14 +322,32 @@ function buildUpdateFields(research, existingFields) {
   }
 
   const candidate = research.candidate;
+  const zimas = research.zimas;
+  const complexityText = [
+    existingFields["Property Type"],
+    existingFields["Unit / Suite / Scope Detail"],
+    existingFields.Scope,
+    ...(Array.isArray(existingFields["Complexity Flags"]) ? existingFields["Complexity Flags"] : [])
+  ].map((item) => item && item.name ? item.name : clean(item)).join(" ");
+  const needsUnitReview = /\b(duplex|triplex|fourplex|apartment|multi[-\s]?unit|multifamily|condo|unit|suite|commercial|partial|adu|guest house)\b/i.test(complexityText);
+  const hasParcel = Boolean(zimas && zimas.parcel);
+  const propertyStatus = hasParcel && !needsUnitReview ? "Matched" : "Possible Match";
   return {
     ...baseFields,
     APN: candidate.ain,
+    PIN: hasParcel ? zimas.parcel.pin : "",
+    "Lot Size": hasParcel && zimas.parcel.lotSizeSqFt !== null
+      ? `${zimas.parcel.lotSizeSqFt.toLocaleString()} sq ft`
+      : "",
+    Zoning: zimas ? zimas.zoning : "",
     "Neighborhood / LA Area": candidate.area,
     "Miles From North Hollywood": research.milesFromNorthHollywood,
     "Miles From Monterey Park": research.milesFromMontereyPark,
     "Aerial Map URL": candidate.aerialUrl,
-    "LA City Match Status": research.laCityMatch,
+    "ZIMAS Link": hasParcel ? zimas.sourceUrl : "",
+    "Property Data Source URL": hasParcel ? zimas.sourceUrl : research.sourceUrl,
+    "Property Check Status": propertyStatus,
+    "LA City Match Status": hasParcel ? "Matched" : research.laCityMatch,
     "Complexity Flags": addFlags(existingFields["Complexity Flags"], [])
   };
 }
