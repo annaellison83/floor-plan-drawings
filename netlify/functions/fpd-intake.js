@@ -370,7 +370,7 @@ function calculateSuggestedQuote(fields, research, pricingRows) {
   if (!verifiedSqFt) {
     return {
       fields: {
-        "Quote Review": "Needs Manual Review",
+        "Quote Review": "Ready for Anna",
         "Quote Calculation Notes": "No online building square footage was found in the LA County assessor record; do not use lot size as building size. Anna should verify the size before quoting."
       },
       note: "No online building square footage found"
@@ -395,7 +395,7 @@ function calculateSuggestedQuote(fields, research, pricingRows) {
   if (!row || !style) {
     return {
       fields: {
-        "Quote Review": "Needs Manual Review",
+        "Quote Review": "Ready for Anna",
         "Quote Calculation Notes": !row
           ? `${verifiedSqFt.toLocaleString()} sq ft is outside the configured pricing table; Anna should quote manually.`
           : "The requested drawing service does not match a configured pricing rule; Anna should quote manually."
@@ -427,7 +427,7 @@ function calculateSuggestedQuote(fields, research, pricingRows) {
   if (base === null) {
     return {
       fields: {
-        "Quote Review": "Needs Manual Review",
+        "Quote Review": "Ready for Anna",
         "Quote Calculation Notes": `No configured ${serviceLabel || "service"} price exists for the ${row.sizeBand || "selected"} size band.`
       },
       note: "Service price missing"
@@ -473,7 +473,7 @@ async function enrichCreatedRecord(recordUrl, token, fields, workflow, baseId, p
     } catch (pricingError) {
       console.error("Quote pricing lookup failed", pricingError.message);
       quoteFields = {
-        "Quote Review": "Needs Manual Review",
+        "Quote Review": "Ready for Anna",
         "Quote Calculation Notes": `Pricing lookup failed; Anna should quote manually. (${pricingError.message})`
       };
     }
