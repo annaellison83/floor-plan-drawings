@@ -300,6 +300,13 @@ function buildZimasPublicUrl(pin, address) {
   return `https://zimas.lacity.org/map.asp?${params.toString()}`;
 }
 
+function buildGoogleMapsSearchUrl(address) {
+  const value = clean(address);
+  return value
+    ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(value)}`
+    : "";
+}
+
 function buildZimasPointQueryUrl(endpoint, x, y, outFields) {
   const params = new URLSearchParams({
     geometry: `${x},${y}`,
@@ -493,7 +500,10 @@ function buildUpdateFields(research, existingFields) {
   const currentNotes = clean(existingFields["Quote Calculation Notes"]);
   const baseFields = {
     "Property Check Status": research.status,
-    "Property Data Source URL": research.sourceUrl || "",
+    // Keep raw GIS query endpoints internal; they open as JSON/code in a browser.
+    "Property Data Source URL": research.ok
+      ? research.sourceUrl || ""
+      : buildGoogleMapsSearchUrl(research.address || existingFields["Property Address"]),
     "Quote Calculation Notes": [currentNotes, note].filter(Boolean).join("\n\n"),
     "Property Research Complete": true
   };
@@ -519,8 +529,7 @@ function buildUpdateFields(research, existingFields) {
   const zimasPublicUrl = hasParcel
     ? buildZimasPublicUrl(zimas.parcel.pin, candidate.fullAddress || research.address)
     : "";
-  const publicDataUrl = zimasPublicUrl
-    || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(candidate.fullAddress || research.address)}`;
+  const publicDataUrl = zimasPublicUrl || buildGoogleMapsSearchUrl(candidate.fullAddress || research.address);
   const aerialFilename = (candidate.fullAddress || research.address)
     .replace(/[^A-Za-z0-9]+/g, "-")
     .replace(/^-|-$/g, "")
