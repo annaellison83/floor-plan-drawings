@@ -1,6 +1,7 @@
 const AIRTABLE_API_URL = "https://api.airtable.com/v0";
 const CAMS_QUERY_URL = "https://arcgis.gis.lacounty.gov/arcgis/rest/services/LACounty_Dynamic/CAMS/MapServer/1/query";
 const AERIAL_EXPORT_URL = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export";
+const GOOGLE_STATIC_MAP_URL = "https://maps.googleapis.com/maps/api/staticmap";
 const ZIMAS_LANDBASE_QUERY_URL = "https://zimas.lacity.org/arcgis/rest/services/zma/zimas/MapServer/105/query";
 const ZIMAS_ZONING_QUERY_URL = "https://zimas.lacity.org/arcgis/rest/services/zma/zimas/MapServer/1102/query";
 const NORTH_HOLLYWOOD = { lat: 34.187, lon: -118.3813 };
@@ -130,6 +131,36 @@ function buildAerialUrl(x, y) {
     f: "image"
   });
   return `${AERIAL_EXPORT_URL}?${params.toString()}`;
+}
+
+function buildMarkedAerialUrl(location) {
+  const key = cleanEnv(process.env.GOOGLE_MAPS_STATIC_KEY || process.env.GOOGLE_MAPS_BROWSER_KEY);
+  if (!key || !location) return "";
+
+  const point = `${location.lat},${location.lon}`;
+  const params = new URLSearchParams({
+    center: point,
+    zoom: "19",
+    size: "900x650",
+    scale: "2",
+    maptype: "satellite",
+    markers: `color:red|label:P|${point}`,
+    key
+  });
+  return `${GOOGLE_STATIC_MAP_URL}?${params.toString()}`;
+}
+
+function buildZimasPublicUrl(pin, address) {
+  if (!clean(pin)) return "";
+
+  const params = new URLSearchParams({
+    Cmd: "zoom1ToPIN",
+    PIN: clean(pin),
+    MultiSelPin: clean(pin),
+    SelectedMultiAddress: clean(address),
+    ToolTips: "true"
+  });
+  return `https://zimas.lacity.org/map.asp?${params.toString()}`;
 }
 
 function buildZimasPointQueryUrl(endpoint, x, y, outFields) {
@@ -281,7 +312,9 @@ async function researchAddress(address) {
       area,
       zip: clean(attributes.ZipCode),
       location,
-      aerialUrl: location ? buildAerialUrl(x, y) : ""
+      aerialUrl: location
+        ? buildMarkedAerialUrl(location) || buildAerialUrl(x, y)
+        : ""
     },
     milesFromNorthHollywood: location ? roundMiles(milesBetween(location, NORTH_HOLLYWOOD)) : null,
     milesFromMontereyPark: location ? roundMiles(milesBetween(location, MONTEREY_PARK)) : null,
@@ -337,6 +370,15 @@ function buildUpdateFields(research, existingFields) {
   ].map((item) => item && item.name ? item.name : clean(item)).join(" ");
   const needsUnitReview = /\b(duplex|triplex|fourplex|apartment|multi[-\s]?unit|multifamily|condo|unit|suite|commercial|partial|adu|guest house)\b/i.test(complexityText);
   const hasParcel = Boolean(zimas && zimas.parcel);
+  const zimasPublicUrl = hasParcel
+    ? buildZimasPublicUrl(zimas.parcel.pin, candidate.fullAddress || research.address)
+    : "";
+  const publicDataUrl = zimasPublicUrl
+    || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(candidate.fullAddress || research.address)}`;
+  const aerialFilename = (candidate.fullAddress || research.address)
+    .replace(/[^A-Za-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 80) || "property";
   const propertyStatus = hasParcel && !needsUnitReview ? "Matched" : "Possible Match";
   return {
     ...baseFields,
@@ -350,8 +392,12 @@ function buildUpdateFields(research, existingFields) {
     "Miles From North Hollywood": research.milesFromNorthHollywood,
     "Miles From Monterey Park": research.milesFromMontereyPark,
     "Aerial Map URL": candidate.aerialUrl,
-    "ZIMAS Link": hasParcel ? zimas.sourceUrl : "",
-    "Property Data Source URL": hasParcel ? zimas.sourceUrl : research.sourceUrl,
+    "Aerial Parcel Preview": candidate.aerialUrl ? [{
+      url: candidate.aerialUrl,
+      filename: `aerial-${aerialFilename}.jpg`
+    }] : [],
+    "ZIMAS Link": zimasPublicUrl,
+    "Property Data Source URL": publicDataUrl,
     "Property Check Status": propertyStatus,
     "LA City Match Status": hasParcel ? "Matched" : research.laCityMatch,
     "Complexity Flags": addFlags(existingFields["Complexity Flags"], [])
