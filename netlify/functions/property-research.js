@@ -2,6 +2,9 @@ const AIRTABLE_API_URL = "https://api.airtable.com/v0";
 const CAMS_QUERY_URL = "https://arcgis.gis.lacounty.gov/arcgis/rest/services/LACounty_Dynamic/CAMS/MapServer/1/query";
 const AERIAL_EXPORT_URL = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export";
 const GOOGLE_STATIC_MAP_URL = "https://maps.googleapis.com/maps/api/staticmap";
+const COUNTY_PRINT_URL = "https://utility.arcgisonline.com/arcgis/rest/services/Utilities/PrintingTools/GPServer/Export%20Web%20Map%20Task/execute";
+const COUNTY_AERIAL_TEMPLATE_URL = "https://svc.pictometry.com/Image/BCC27E3E-766E-CE0B-7D11-AA4760AC43ED/wmts/PICT-LARIAC7--KCrSFBeqgG/default/GoogleMapsCompatible/{level}/{col}/{row}.png";
+const COUNTY_LABEL_STYLE_URL = "https://www.arcgis.com/sharing/rest/content/items/ba9c22e4e587428988481824d4e61a2e/resources/styles/root.json";
 const ZIMAS_LANDBASE_QUERY_URL = "https://zimas.lacity.org/arcgis/rest/services/zma/zimas/MapServer/105/query";
 const ZIMAS_ZONING_QUERY_URL = "https://zimas.lacity.org/arcgis/rest/services/zma/zimas/MapServer/1102/query";
 const NORTH_HOLLYWOOD = { lat: 34.187, lon: -118.3813 };
@@ -150,6 +153,140 @@ function buildMarkedAerialUrl(location) {
   return `${GOOGLE_STATIC_MAP_URL}?${params.toString()}`;
 }
 
+function webMercatorFromLatLon(location) {
+  const radius = 6378137;
+  return {
+    x: location.lon * Math.PI / 180 * radius,
+    y: Math.log(Math.tan(Math.PI / 4 + location.lat * Math.PI / 360)) * radius
+  };
+}
+
+function countyTileInfo() {
+  const origin = -20037508.34278925;
+  const baseResolution = 156543.03392804097;
+  return {
+    dpi: 96,
+    rows: 256,
+    cols: 256,
+    origin: {
+      x: origin,
+      y: -origin,
+      spatialReference: { wkid: 102100 }
+    },
+    spatialReference: { wkid: 102100 },
+    lods: Array.from({ length: 31 }, (_, level) => ({
+      level,
+      resolution: baseResolution / (2 ** level),
+      scale: 591658710.9091312 / (2 ** level)
+    }))
+  };
+}
+
+async function buildCountyAerialUrl(location) {
+  if (!location) return "";
+
+  const point = webMercatorFromLatLon(location);
+  // A tight crop keeps the requested building and nearby address labels legible.
+  const halfWidth = 75;
+  const halfHeight = 50;
+  const webMap = {
+    mapOptions: {
+      extent: {
+        xmin: point.x - halfWidth,
+        ymin: point.y - halfHeight,
+        xmax: point.x + halfWidth,
+        ymax: point.y + halfHeight,
+        spatialReference: { wkid: 102100 }
+      }
+    },
+    exportOptions: {
+      dpi: 96,
+      outputSize: [1200, 800]
+    },
+    operationalLayers: [{
+      id: "property-marker",
+      title: "Requested property",
+      featureCollection: {
+        layers: [{
+          layerDefinition: {
+            name: "Requested property",
+            geometryType: "esriGeometryPoint",
+            drawingInfo: {
+              renderer: {
+                type: "simple",
+                symbol: {
+                  type: "esriSMS",
+                  style: "esriSMSCircle",
+                  color: [214, 40, 40, 230],
+                  size: 18,
+                  outline: { color: [255, 255, 255, 255], width: 3 }
+                }
+              }
+            }
+          },
+          featureSet: {
+            geometryType: "esriGeometryPoint",
+            features: [{
+              geometry: {
+                x: point.x,
+                y: point.y,
+                spatialReference: { wkid: 102100 }
+              },
+              attributes: {}
+            }]
+          }
+        }]
+      }
+    }],
+    baseMap: {
+      title: "LA County Aerial 2023 (Labels)",
+      baseMapLayers: [
+        {
+          id: "county-aerial-2023",
+          title: "LARIAC7-02 (2023 AccuPlus Winter Countywide RGB Ortho)",
+          type: "WebTiledLayer",
+          layerType: "WebTiledLayer",
+          templateURL: COUNTY_AERIAL_TEMPLATE_URL,
+          tileInfo: countyTileInfo(),
+          visibility: true,
+          opacity: 1
+        },
+        {
+          id: "county-aerial-labels",
+          title: "Aerial Imagery Labels - Vector Tile",
+          type: "VectorTileLayer",
+          layerType: "VectorTileLayer",
+          styleUrl: COUNTY_LABEL_STYLE_URL,
+          visibility: true,
+          opacity: 1
+        }
+      ]
+    }
+  };
+
+  const response = await fetch(COUNTY_PRINT_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      f: "json",
+      Web_Map_as_JSON: JSON.stringify(webMap),
+      Format: "JPG",
+      Layout_Template: "MAP_ONLY"
+    }),
+    signal: typeof AbortSignal !== "undefined" && AbortSignal.timeout
+      ? AbortSignal.timeout(7000)
+      : undefined
+  });
+  const body = await response.json().catch(() => ({}));
+  const imageUrl = body && body.results && body.results[0]
+    && body.results[0].value && body.results[0].value.url;
+  if (!response.ok || !imageUrl) {
+    const detail = body && body.error && body.error.message;
+    throw new Error(detail || `County aerial render failed with status ${response.status}`);
+  }
+  return imageUrl;
+}
+
 function buildZimasPublicUrl(pin, address) {
   if (!clean(pin)) return "";
 
@@ -293,12 +430,20 @@ async function researchAddress(address) {
   const area = getArea(attributes);
   const insideLaCity = /\blos angeles\b/i.test(area);
   let zimas = null;
+  let aerialUrl = "";
   if (Number.isFinite(x) && Number.isFinite(y)) {
-    try {
-      zimas = await lookupZimas(x, y);
-    } catch (error) {
-      console.warn("ZIMAS lookup failed", error.message);
-    }
+    const [zimasResult, aerialResult] = await Promise.all([
+      lookupZimas(x, y).catch((error) => {
+        console.warn("ZIMAS lookup failed", error.message);
+        return null;
+      }),
+      buildCountyAerialUrl(location).catch((error) => {
+        console.warn("LA County aerial render failed", error.message);
+        return "";
+      })
+    ]);
+    zimas = zimasResult;
+    aerialUrl = aerialResult;
   }
 
   return {
@@ -312,9 +457,9 @@ async function researchAddress(address) {
       area,
       zip: clean(attributes.ZipCode),
       location,
-      aerialUrl: location
+      aerialUrl: aerialUrl || (location
         ? buildMarkedAerialUrl(location) || buildAerialUrl(x, y)
-        : ""
+        : "")
     },
     milesFromNorthHollywood: location ? roundMiles(milesBetween(location, NORTH_HOLLYWOOD)) : null,
     milesFromMontereyPark: location ? roundMiles(milesBetween(location, MONTEREY_PARK)) : null,
@@ -338,6 +483,7 @@ function researchNote(research) {
     research.zimas && research.zimas.zoning && `ZIMAS zoning: ${research.zimas.zoning}`,
     research.milesFromNorthHollywood !== null && `Approx. miles from North Hollywood: ${research.milesFromNorthHollywood}`,
     research.milesFromMontereyPark !== null && `Approx. miles from Monterey Park: ${research.milesFromMontereyPark}`,
+    candidate.aerialUrl && "Aerial preview: LA County 2023 imagery with address labels",
     "Review duplexes, apartments, suites, and unusual sub-addresses manually even when ZIMAS returns one parcel."
   ].filter(Boolean).join("\n");
 }
@@ -514,3 +660,4 @@ exports.handler = async (event) => {
 
 exports.researchAddress = researchAddress;
 exports.buildUpdateFields = buildUpdateFields;
+exports.buildCountyAerialUrl = buildCountyAerialUrl;
