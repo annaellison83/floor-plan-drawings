@@ -32,6 +32,18 @@ function cleanAirtableToken(value) {
     .trim();
 }
 
+function parseSquareFeet(value) {
+  const match = clean(value).replace(/,/g, "").match(/\d+(?:\.\d+)?/);
+  if (!match) return null;
+  const number = Math.round(Number(match[0]));
+  return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+function parseMoney(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : null;
+}
+
 function compactLines(lines) {
   return lines.filter(Boolean).join("\n");
 }
@@ -186,7 +198,7 @@ function buildAirtableFields(data) {
     "Property Address": city ? `${address}, ${city}` : address,
     City: city,
     State: city || address ? "CA" : "",
-    "Approx Sq Ft": clean(data.approxSqFt),
+    "Approx Sq Ft": parseSquareFeet(data.approxSqFt),
     "Property Type": clean(data.buildingType),
     Purpose: clean(data.planType),
     "Drawing Style": clean(data.drawingStyleLabel || data.drawingStyle),
@@ -308,17 +320,171 @@ async function updateAirtableRecord(recordUrl, token, fields) {
   return body;
 }
 
-async function enrichCreatedRecord(recordUrl, token, fields, workflow) {
+async function fetchPricingRows(baseId, token, tableName) {
+  const rows = [];
+  let offset = "";
+  do {
+    const params = new URLSearchParams({ pageSize: "100" });
+    if (offset) params.set("offset", offset);
+    const response = await fetch(`${AIRTABLE_API_URL}/${baseId}/${encodeURIComponent(tableName)}?${params.toString()}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error((body.error && body.error.message) || `Pricing lookup failed with status ${response.status}`);
+    }
+    rows.push(...(body.records || []).map((record) => record.fields || {}));
+    offset = body.offset || "";
+  } while (offset);
+  return rows;
+}
+
+function quoteStyle(value) {
+  const style = clean(value).toLowerCase();
+  if (/matterport|3d|tour/.test(style)) return "matterport";
+  if (/color.*exterior|exterior.*color|colorext/.test(style)) return "colorExterior";
+  if (/color/.test(style)) return "colorInterior";
+  if (/b\s*[&+]?\s*w|black|white|line/.test(style)) return "bw";
+  return "";
+}
+
+function isComplexProperty(fields) {
+  const text = [
+    fields["Property Type"],
+    fields["Unit / Suite / Scope Detail"],
+    fields.Scope,
+    fields["Complexity Flags"]
+  ].map((item) => Array.isArray(item)
+    ? item.map((entry) => entry && entry.name ? entry.name : clean(entry)).join(" ")
+    : clean(item)).join(" ");
+  return /\b(duplex|triplex|fourplex|apartment|multi[-\s]?unit|multifamily|commercial|suite|tenant|partial|adu|guest house|unit)\b/i.test(text);
+}
+
+function calculateSuggestedQuote(fields, research, pricingRows) {
+  const assessor = research && research.countyAssessor;
+  const verifiedSqFt = assessor && assessor.buildingSqFt ? Number(assessor.buildingSqFt) : null;
+  const style = quoteStyle(fields["Drawing Style"]);
+  const tourRequested = /^(yes|true|requested|add|included)$/i.test(clean(fields["3D Tour Requested"]));
+  const notes = [];
+
+  if (!verifiedSqFt) {
+    return {
+      fields: {
+        "Quote Review": "Needs Manual Review",
+        "Quote Calculation Notes": "No online building square footage was found in the LA County assessor record; do not use lot size as building size. Anna should verify the size before quoting."
+      },
+      note: "No online building square footage found"
+    };
+  }
+
+  const rows = (pricingRows || [])
+    .map((row) => ({
+      maxSqFt: parseSquareFeet(row["Max Sq Ft"]),
+      bw: parseMoney(row["B&W Base"]),
+      colorInterior: parseMoney(row["Condo Color Interior Base"]),
+      colorExterior: parseMoney(row["Color + Exterior Starting At"]),
+      matterport: parseMoney(row["Matterport Base"]),
+      bundle: parseMoney(row["Bundle Base"]),
+      sizeBand: clean(row["Size Band"]),
+      exteriorRange: clean(row["Color + Exterior Range"])
+    }))
+    .filter((row) => row.maxSqFt && row.maxSqFt > 0)
+    .sort((a, b) => a.maxSqFt - b.maxSqFt);
+  const row = rows.find((candidate) => verifiedSqFt <= candidate.maxSqFt);
+
+  if (!row || !style) {
+    return {
+      fields: {
+        "Quote Review": "Needs Manual Review",
+        "Quote Calculation Notes": !row
+          ? `${verifiedSqFt.toLocaleString()} sq ft is outside the configured pricing table; Anna should quote manually.`
+          : "The requested drawing service does not match a configured pricing rule; Anna should quote manually."
+      },
+      note: !row ? "Size outside pricing table" : "Service needs manual pricing"
+    };
+  }
+
+  let base = null;
+  let serviceLabel = "";
+  if (style === "bw") {
+    base = Number.isFinite(row.bw) ? row.bw : null;
+    serviceLabel = "B&W interior";
+  } else if (style === "colorInterior") {
+    base = Number.isFinite(row.colorInterior) ? row.colorInterior : null;
+    serviceLabel = "Color interior";
+    if (!/condo/i.test(clean(fields["Property Type"]))) {
+      notes.push("Color interior uses the condo rate; review for non-condo property");
+    }
+  } else if (style === "colorExterior") {
+    base = Number.isFinite(row.colorExterior) ? row.colorExterior : null;
+    serviceLabel = "Color interior + exterior";
+    row.exteriorRange && notes.push(`Published range: ${row.exteriorRange}`);
+  } else if (style === "matterport") {
+    base = Number.isFinite(row.matterport) ? row.matterport : null;
+    serviceLabel = "Matterport";
+  }
+
+  if (base === null) {
+    return {
+      fields: {
+        "Quote Review": "Needs Manual Review",
+        "Quote Calculation Notes": `No configured ${serviceLabel || "service"} price exists for the ${row.sizeBand || "selected"} size band.`
+      },
+      note: "Service price missing"
+    };
+  }
+
+  let suggested = base;
+  if (tourRequested && style !== "matterport") {
+    if (Number.isFinite(row.matterport)) {
+      suggested += row.matterport;
+      notes.push(`Matterport add-on included because 3D Tour Requested is ${clean(fields["3D Tour Requested"])}: $${row.matterport}`);
+    } else {
+      notes.push("3D tour requested but no Matterport price is configured for this size band");
+    }
+  }
+  const complex = isComplexProperty(fields);
+  if (complex) notes.push("Multi-unit/commercial/partial-scope adjustment is pending Anna's fee rule");
+  notes.push("Travel zone and fee are pending Anna's zone chart");
+
+  return {
+    fields: {
+      "Suggested Quote": suggested,
+      "Quote Calculation Notes": [
+        `Online size: ${verifiedSqFt.toLocaleString()} sq ft`,
+        `Pricing row: ${row.sizeBand || `up to ${row.maxSqFt.toLocaleString()} sq ft`}`,
+        `Base service: ${serviceLabel} ($${base})`,
+        ...notes
+      ].join("\n"),
+      "Quote Review": "Ready for Anna"
+    },
+    note: `Suggested base: $${suggested}`
+  };
+}
+
+async function enrichCreatedRecord(recordUrl, token, fields, workflow, baseId, pricingTable) {
   try {
     const research = await researchAddress(fields["Property Address"]);
     const researchFields = buildUpdateFields(research, fields);
+    let quoteFields = {};
+    try {
+      const pricingRows = await fetchPricingRows(baseId, token, pricingTable);
+      quoteFields = calculateSuggestedQuote({ ...fields, ...researchFields }, research, pricingRows).fields;
+    } catch (pricingError) {
+      console.error("Quote pricing lookup failed", pricingError.message);
+      quoteFields = {
+        "Quote Review": "Needs Manual Review",
+        "Quote Calculation Notes": `Pricing lookup failed; Anna should quote manually. (${pricingError.message})`
+      };
+    }
     const finalFields = {
       ...researchFields,
+      ...quoteFields,
       "Property Research Complete": true,
       "Anna Email Status": "Not Sent"
     };
 
-    if (workflow === "Quick Quote" && research.ok) {
+    if (workflow === "Quick Quote" && research.ok && !finalFields["Quote Review"]) {
       finalFields["Quote Review"] = "Ready for Anna";
     }
 
@@ -357,6 +523,7 @@ exports.handler = async (event) => {
   const token = cleanAirtableToken(process.env.AIRTABLE_TOKEN);
   const baseId = cleanEnv(process.env.AIRTABLE_BASE_ID);
   const tableName = cleanEnv(process.env.AIRTABLE_JOBS_TABLE) || "Jobs";
+  const pricingTable = cleanEnv(process.env.AIRTABLE_PRICING_TABLE) || "Quote Pricing";
 
   if (!token || !baseId) {
     return json(500, {
@@ -394,7 +561,9 @@ exports.handler = async (event) => {
     recordUrl,
     token,
     fields,
-    clean(fields["Website Workflow"])
+    clean(fields["Website Workflow"]),
+    baseId,
+    pricingTable
   );
 
   await maybeNotify(process.env.NOTIFY_WEBHOOK_URL, {
@@ -413,3 +582,5 @@ exports.handler = async (event) => {
     propertyResearch: enrichment.ok ? enrichment.research.status : "Needs Manual Review"
   });
 };
+
+exports.calculateSuggestedQuote = calculateSuggestedQuote;

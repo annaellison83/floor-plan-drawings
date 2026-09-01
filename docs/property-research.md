@@ -7,12 +7,14 @@
 - Searches the public LA County CAMS address-point layer.
 - Returns a possible AIN/APN candidate and the LA area label.
 - Adds ZIMAS PIN, parcel area, and zoning when the point lands cleanly on one City of Los Angeles parcel.
+- Looks up building square footage, building count, units, use type, and year built from the official LA County assessor parcel layer.
+- Stores a human-facing ZIMAS link and LA County Assessor Portal link; raw ArcGIS query URLs are kept out of the email-facing source field.
 - Generates a public LARIAC aerial preview URL.
 - Estimates straight-line miles from North Hollywood and Monterey Park.
-- Marks uncertain or missing matches for manual review.
-- Never fills square footage or quote amounts.
+- Calculates a suggested internal price from the Airtable `Quote Pricing` table when online building square footage and a recognized service are available.
+- Marks uncertain, missing-size, out-of-band, or unpriced jobs for manual review.
 
-The address lookup uses [CAMS address points](https://arcgis.gis.lacounty.gov/arcgis/rest/services/LACounty_Dynamic/CAMS/MapServer/1). Parcel and zoning context comes from the [ZIMAS landbase service](https://zimas.lacity.org/arcgis/rest/services/zma/zimas/MapServer/105) and [ZIMAS zoning service](https://zimas.lacity.org/arcgis/rest/services/zma/zimas/MapServer/1102). The aerial preview uses Esri's public [World Imagery MapServer](https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer), which is more dependable for a small preview image than the county's current dynamic raster export.
+The address lookup uses [CAMS address points](https://arcgis.gis.lacounty.gov/arcgis/rest/services/LACounty_Dynamic/CAMS/MapServer/1). Parcel and zoning context comes from the [ZIMAS landbase service](https://zimas.lacity.org/arcgis/rest/services/zma/zimas/MapServer/105) and [ZIMAS zoning service](https://zimas.lacity.org/arcgis/rest/services/zma/zimas/MapServer/1102). Building size comes from the [LA County parcel boundary service](https://arcgis.gis.lacounty.gov/arcgis/rest/services/DRP/GISNET_Public/MapServer/333), whose assessor fields include building square footage. The aerial preview uses LA County's public 2023 imagery layer rendered through ArcGIS.
 
 ## Read-only preview
 
@@ -43,22 +45,26 @@ The request must include `X-Property-Research-Key` matching `PROPERTY_RESEARCH_K
 
 The CAMS result is an address point, not proof of a particular apartment, suite, unit, or parcel. A single-family-looking address is still stored as `Possible Match`; duplexes, apartments, commercial suites, multi-parcel properties, and no-match results remain manual-review work.
 
-The helper currently leaves these alone until the property is reviewed:
+The helper leaves these alone until the property is reviewed when the source data is missing or ambiguous:
 
-- `Verified Sq Ft`
-- `Sq Ft Source`
-- `Suggested Quote`
-- `Quote Zone`
-- `Zone Fee`
-- `Multi-Unit Fee`
+- `Verified Sq Ft` is filled from LA County assessor building square footage, never from ZIMAS lot area.
+- `Sq Ft Source` identifies the public source.
+- `Suggested Quote` is filled from the Airtable pricing table when the online size and requested service are usable.
+- `Quote Zone`, `Zone Fee`, and `Multi-Unit Fee` remain pending until Anna's travel and complexity rules are entered.
 
 `Lot Size` is parcel area from ZIMAS. It is not the building's livable square footage and must not be used as the quote size.
 
-## Next wiring step
+## Quote calculation
 
-Airtable's currently available automation actions do not include an outbound HTTP request or a script action through the CLI. To make this run automatically, use one of these small adapters:
+The intake function reads the `Quote Pricing` table on each new job. It chooses the smallest size band that contains the online building square footage, then applies the requested service:
 
-1. A Render cron job that finds new `Jobs` records and POSTs their record IDs here.
-2. An Airtable UI `Run a script` action that POSTs the record ID here.
+- B&W uses `B&W Base`.
+- Color Interior uses `Condo Color Interior Base` and is flagged for review when the property is not a condo.
+- Color Interior + Exterior uses `Color + Exterior Starting At`.
+- A requested 3D tour adds the size-band `Matterport Base` when available.
 
-Keep the adapter idempotent: only call records with `Property Check Status = Not Checked`, and let the helper overwrite only its own research fields.
+The result is an internal suggested number for Anna. It is not presented as a detailed client-facing fee breakdown. Travel, multi-unit, commercial, and partial-scope adjustments are called out in `Quote Calculation Notes` until their amounts are configured.
+
+## Runtime behavior
+
+Website submissions call the research pass immediately after the Airtable record is created. A protected POST can also rerun research for an existing record when needed. Keep any future adapter idempotent: only call records with `Property Check Status = Not Checked`, and let the helper overwrite only its own research fields.

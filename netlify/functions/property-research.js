@@ -7,6 +7,8 @@ const COUNTY_AERIAL_TEMPLATE_URL = "https://svc.pictometry.com/Image/BCC27E3E-76
 const COUNTY_LABEL_STYLE_URL = "https://www.arcgis.com/sharing/rest/content/items/ba9c22e4e587428988481824d4e61a2e/resources/styles/root.json";
 const ZIMAS_LANDBASE_QUERY_URL = "https://zimas.lacity.org/arcgis/rest/services/zma/zimas/MapServer/105/query";
 const ZIMAS_ZONING_QUERY_URL = "https://zimas.lacity.org/arcgis/rest/services/zma/zimas/MapServer/1102/query";
+const COUNTY_PARCEL_QUERY_URL = "https://arcgis.gis.lacounty.gov/arcgis/rest/services/DRP/GISNET_Public/MapServer/333/query";
+const COUNTY_ASSESSOR_PORTAL_URL = "https://portal.assessor.lacounty.gov/parceldetail";
 const NORTH_HOLLYWOOD = { lat: 34.187, lon: -118.3813 };
 const MONTEREY_PARK = { lat: 34.0625, lon: -118.1228 };
 
@@ -307,6 +309,11 @@ function buildGoogleMapsSearchUrl(address) {
     : "";
 }
 
+function buildAssessorPublicUrl(ain) {
+  const value = clean(ain).replace(/[^0-9]/g, "");
+  return value ? `${COUNTY_ASSESSOR_PORTAL_URL}/${value}` : "";
+}
+
 function buildZimasPointQueryUrl(endpoint, x, y, outFields) {
   const params = new URLSearchParams({
     geometry: `${x},${y}`,
@@ -319,6 +326,21 @@ function buildZimasPointQueryUrl(endpoint, x, y, outFields) {
     f: "json"
   });
   return `${endpoint}?${params.toString()}`;
+}
+
+function buildCountyParcelPointQueryUrl(x, y, ain) {
+  const params = new URLSearchParams({
+    geometry: `${x},${y}`,
+    geometryType: "esriGeometryPoint",
+    inSR: "3857",
+    spatialRel: "esriSpatialRelIntersects",
+    outFields: "AIN,APN,SitusFullAddress,UseDescription,UseType,SQFTmain1,SQFTmain2,SQFTmain3,SQFTmain4,SQFTmain5,Units1,YearBuilt1",
+    returnGeometry: "false",
+    resultRecordCount: "10",
+    f: "json"
+  });
+  if (clean(ain)) params.set("where", `AIN = '${escapeArcgisLiteral(ain)}'`);
+  return `${COUNTY_PARCEL_QUERY_URL}?${params.toString()}`;
 }
 
 function uniqueCandidates(features) {
@@ -380,6 +402,53 @@ async function lookupZimas(x, y) {
   };
 }
 
+async function lookupCountyAssessor(x, y, ain) {
+  const queryUrl = buildCountyParcelPointQueryUrl(x, y, ain);
+  const result = await fetchJson(queryUrl);
+  const matches = (result.features || [])
+    .map((feature) => feature && feature.attributes ? feature.attributes : {})
+    .filter((attributes) => clean(attributes.AIN));
+  const attributes = matches.find((item) => !ain || clean(item.AIN) === clean(ain)) || matches[0];
+  if (!attributes) {
+    return {
+      status: "No Match",
+      sourceUrl: queryUrl,
+      publicUrl: "",
+      buildingSqFt: null,
+      buildings: [],
+      units: null,
+      useDescription: ""
+    };
+  }
+
+  const buildings = [1, 2, 3, 4, 5]
+    .map((index) => ({
+      number: index,
+      sqFt: Number.isFinite(Number(attributes[`SQFTmain${index}`]))
+        ? Number(attributes[`SQFTmain${index}`])
+        : null
+    }))
+    .filter((building) => building.sqFt && building.sqFt > 0);
+  const buildingSqFt = buildings.length
+    ? buildings.reduce((total, building) => total + building.sqFt, 0)
+    : null;
+
+  return {
+    status: buildingSqFt ? "Matched" : "Matched - No Building Sq Ft",
+    sourceUrl: queryUrl,
+    publicUrl: buildAssessorPublicUrl(attributes.AIN),
+    ain: clean(attributes.AIN),
+    apn: clean(attributes.APN),
+    address: clean(attributes.SitusFullAddress),
+    buildingSqFt,
+    buildings,
+    units: Number.isFinite(Number(attributes.Units1)) ? Number(attributes.Units1) : null,
+    useDescription: clean(attributes.UseDescription),
+    useType: clean(attributes.UseType),
+    yearBuilt: clean(attributes.YearBuilt1)
+  };
+}
+
 function addFlags(existing, additions) {
   const flags = Array.isArray(existing)
     ? existing.map((item) => (item && item.name ? item.name : clean(item))).filter(Boolean)
@@ -437,11 +506,16 @@ async function researchAddress(address) {
   const area = getArea(attributes);
   const insideLaCity = /\blos angeles\b/i.test(area);
   let zimas = null;
+  let countyAssessor = null;
   let aerialUrl = "";
   if (Number.isFinite(x) && Number.isFinite(y)) {
-    const [zimasResult, aerialResult] = await Promise.all([
+    const [zimasResult, assessorResult, aerialResult] = await Promise.all([
       lookupZimas(x, y).catch((error) => {
         console.warn("ZIMAS lookup failed", error.message);
+        return null;
+      }),
+      lookupCountyAssessor(x, y, clean(attributes.AIN)).catch((error) => {
+        console.warn("LA County assessor lookup failed", error.message);
         return null;
       }),
       buildCountyAerialUrl(location).catch((error) => {
@@ -450,6 +524,7 @@ async function researchAddress(address) {
       })
     ]);
     zimas = zimasResult;
+    countyAssessor = assessorResult;
     aerialUrl = aerialResult;
   }
 
@@ -471,7 +546,8 @@ async function researchAddress(address) {
     milesFromNorthHollywood: location ? roundMiles(milesBetween(location, NORTH_HOLLYWOOD)) : null,
     milesFromMontereyPark: location ? roundMiles(milesBetween(location, MONTEREY_PARK)) : null,
     laCityMatch: insideLaCity ? "Matched" : "Needs Manual Review",
-    zimas
+    zimas,
+    countyAssessor
   };
 }
 
@@ -488,6 +564,8 @@ function researchNote(research) {
     candidate.area && `LA area: ${candidate.area}`,
     research.zimas && research.zimas.parcel && `ZIMAS PIN: ${research.zimas.parcel.pin || "not provided"}`,
     research.zimas && research.zimas.zoning && `ZIMAS zoning: ${research.zimas.zoning}`,
+    research.countyAssessor && research.countyAssessor.buildingSqFt && `LA County assessor building size: ${research.countyAssessor.buildingSqFt.toLocaleString()} sq ft`,
+    research.countyAssessor && research.countyAssessor.units && `LA County assessor units: ${research.countyAssessor.units}`,
     research.milesFromNorthHollywood !== null && `Approx. miles from North Hollywood: ${research.milesFromNorthHollywood}`,
     research.milesFromMontereyPark !== null && `Approx. miles from Monterey Park: ${research.milesFromMontereyPark}`,
     candidate.aerialUrl && "Aerial preview: LA County 2023 imagery with address labels",
@@ -529,7 +607,10 @@ function buildUpdateFields(research, existingFields) {
   const zimasPublicUrl = hasParcel
     ? buildZimasPublicUrl(zimas.parcel.pin, candidate.fullAddress || research.address)
     : "";
-  const publicDataUrl = zimasPublicUrl || buildGoogleMapsSearchUrl(candidate.fullAddress || research.address);
+  const assessor = research.countyAssessor;
+  const publicDataUrl = (assessor && assessor.publicUrl)
+    || zimasPublicUrl
+    || buildGoogleMapsSearchUrl(candidate.fullAddress || research.address);
   const aerialFilename = (candidate.fullAddress || research.address)
     .replace(/[^A-Za-z0-9]+/g, "-")
     .replace(/^-|-$/g, "")
@@ -546,6 +627,10 @@ function buildUpdateFields(research, existingFields) {
     "Neighborhood / LA Area": candidate.area,
     "Miles From North Hollywood": research.milesFromNorthHollywood,
     "Miles From Monterey Park": research.milesFromMontereyPark,
+    "Verified Sq Ft": assessor && assessor.buildingSqFt ? assessor.buildingSqFt : null,
+    "Sq Ft Source": assessor && assessor.buildingSqFt
+      ? "LA County Assessor public record"
+      : "No online building square footage found",
     "Aerial Map URL": candidate.aerialUrl,
     "Aerial Parcel Preview": candidate.aerialUrl ? [{
       url: candidate.aerialUrl,
