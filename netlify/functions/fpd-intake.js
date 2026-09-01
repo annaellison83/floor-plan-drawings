@@ -174,7 +174,7 @@ function buildAirtableFields(data) {
   const missing = missingInfo(data, workflow);
   const complexityFlags = airtableComplexityFlags(data);
 
-  return {
+  const fields = {
     "Job ID": `WEB-${Date.now()}`,
     Status: status,
     "Website Workflow": workflow,
@@ -213,6 +213,7 @@ function buildAirtableFields(data) {
     "Original Request": JSON.stringify(summary, null, 2),
     "Property Check Status": "Not Checked",
     "LA City Match Status": "Not Checked",
+    ...(workflow === "Quick Quote" ? { "Quote Review": "Not Started" } : {}),
     "Access Status": workflow === "Order" ? "Requested" : "Not Requested",
     "Drawing Status": "Not Started",
     "Invoice Status": "Not Invoiced",
@@ -222,6 +223,8 @@ function buildAirtableFields(data) {
       clean(data.notes) && `Client notes: ${clean(data.notes)}`
     ])
   };
+
+  return fields;
 }
 
 async function maybeNotify(url, payload) {
