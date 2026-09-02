@@ -412,6 +412,20 @@ function buildCountyParcelPointQueryUrl(x, y, ain) {
   return `${COUNTY_PARCEL_QUERY_URL}?${params.toString()}`;
 }
 
+function buildCountyParcelEnvelopeQueryUrl(x, y, delta) {
+  const params = new URLSearchParams({
+    geometry: `${x - delta},${y - delta},${x + delta},${y + delta}`,
+    geometryType: "esriGeometryEnvelope",
+    inSR: "3857",
+    spatialRel: "esriSpatialRelIntersects",
+    outFields: "AIN,APN,SitusFullAddress,UseDescription,UseType,SQFTmain1,SQFTmain2,SQFTmain3,SQFTmain4,SQFTmain5,Units1,YearBuilt1",
+    returnGeometry: "false",
+    resultRecordCount: "50",
+    f: "json"
+  });
+  return `${COUNTY_PARCEL_QUERY_URL}?${params.toString()}`;
+}
+
 function uniqueCandidates(features) {
   const byKey = new Map();
   (features || []).forEach((feature) => {
@@ -471,25 +485,7 @@ async function lookupZimas(x, y) {
   };
 }
 
-async function lookupCountyAssessor(x, y, ain) {
-  const queryUrl = buildCountyParcelPointQueryUrl(x, y, ain);
-  const result = await fetchJson(queryUrl);
-  const matches = (result.features || [])
-    .map((feature) => feature && feature.attributes ? feature.attributes : {})
-    .filter((attributes) => clean(attributes.AIN));
-  const attributes = matches.find((item) => !ain || clean(item.AIN) === clean(ain)) || matches[0];
-  if (!attributes) {
-    return {
-      status: "No Match",
-      sourceUrl: queryUrl,
-      publicUrl: "",
-      buildingSqFt: null,
-      buildings: [],
-      units: null,
-      useDescription: ""
-    };
-  }
-
+function buildingSqFtForAttributes(attributes) {
   const buildings = [1, 2, 3, 4, 5]
     .map((index) => ({
       number: index,
@@ -498,19 +494,93 @@ async function lookupCountyAssessor(x, y, ain) {
         : null
     }))
     .filter((building) => building.sqFt && building.sqFt > 0);
-  const buildingSqFt = buildings.length
-    ? buildings.reduce((total, building) => total + building.sqFt, 0)
-    : null;
+  return {
+    buildings,
+    buildingSqFt: buildings.length
+      ? buildings.reduce((total, building) => total + building.sqFt, 0)
+      : null
+  };
+}
+
+function assessorMatchScore(attributes, addressHint, ain) {
+  if (ain && clean(attributes.AIN) === clean(ain)) return 1000;
+
+  const target = parseAddress(addressHint);
+  const candidateText = clean(attributes.SitusFullAddress).toUpperCase();
+  if (!target.number || !candidateText) return -1;
+
+  const numberPattern = new RegExp(`\\b${target.number.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}\\b`);
+  if (!numberPattern.test(candidateText)) return -1;
+
+  const candidateWords = candidateText.replace(/[^A-Z0-9]+/g, " ").split(/\s+/).filter(Boolean);
+  const matchingStreetWords = target.streetWords
+    .map((word) => word.toUpperCase())
+    .filter((word) => candidateWords.includes(word)).length;
+  return 60 + matchingStreetWords * 15;
+}
+
+function chooseAssessorMatch(features, addressHint, ain) {
+  const matches = (features || [])
+    .map((feature) => feature && feature.attributes ? feature.attributes : {})
+    .filter((attributes) => clean(attributes.AIN));
+  return matches
+    .map((attributes) => ({
+      attributes,
+      score: assessorMatchScore(attributes, addressHint, ain)
+    }))
+    .filter((candidate) => candidate.score >= 75)
+    .sort((first, second) => second.score - first.score)[0] || null;
+}
+
+async function lookupCountyAssessor(x, y, ain, addressHint) {
+  const queryUrl = buildCountyParcelPointQueryUrl(x, y, ain);
+  const result = await fetchJson(queryUrl);
+  let selected = chooseAssessorMatch(result.features, addressHint, ain);
+  let selectedSourceUrl = queryUrl;
+  let matchMethod = "address point";
+
+  // Address geocoders occasionally place the point on the street edge or a
+  // neighboring driveway. Retry a small parcel window, then match the exact
+  // requested street number and name before accepting a nearby assessor row.
+  if (!selected || !buildingSqFtForAttributes(selected.attributes).buildingSqFt) {
+    for (const delta of [50, 125]) {
+      const nearbyUrl = buildCountyParcelEnvelopeQueryUrl(x, y, delta);
+      const nearbyResult = await fetchJson(nearbyUrl);
+      const nearby = chooseAssessorMatch(nearbyResult.features, addressHint, ain);
+      if (nearby && (!selected || nearby.score >= selected.score)) {
+        selected = nearby;
+        selectedSourceUrl = nearbyUrl;
+        matchMethod = "nearby parcel address match";
+      }
+      if (selected && buildingSqFtForAttributes(selected.attributes).buildingSqFt) break;
+    }
+  }
+
+  const attributes = selected && selected.attributes;
+  if (!attributes) {
+    return {
+      status: "No Match",
+      sourceUrl: selectedSourceUrl,
+      publicUrl: "",
+      buildingSqFt: null,
+      buildings: [],
+      units: null,
+      useDescription: ""
+    };
+  }
+
+  const { buildings, buildingSqFt } = buildingSqFtForAttributes(attributes);
 
   return {
     status: buildingSqFt ? "Matched" : "Matched - No Building Sq Ft",
-    sourceUrl: queryUrl,
+    sourceUrl: selectedSourceUrl,
     publicUrl: buildAssessorPublicUrl(attributes.AIN),
     ain: clean(attributes.AIN),
     apn: clean(attributes.APN),
     address: clean(attributes.SitusFullAddress),
     buildingSqFt,
     buildings,
+    matchMethod,
     units: Number.isFinite(Number(attributes.Units1)) ? Number(attributes.Units1) : null,
     useDescription: clean(attributes.UseDescription),
     useType: clean(attributes.UseType),
@@ -539,7 +609,7 @@ async function researchFromLocation(address, source) {
       console.warn("ZIMAS lookup failed", error.message);
       return null;
     }),
-    lookupCountyAssessor(point.x, point.y, clean(source.ain)).catch((error) => {
+    lookupCountyAssessor(point.x, point.y, clean(source.ain), source.fullAddress || address).catch((error) => {
       console.warn("LA County assessor lookup failed", error.message);
       return null;
     }),
@@ -649,6 +719,7 @@ function researchNote(research) {
     research.zimas && research.zimas.parcel && `ZIMAS PIN: ${research.zimas.parcel.pin || "not provided"}`,
     research.zimas && research.zimas.zoning && `ZIMAS zoning: ${research.zimas.zoning}`,
     research.countyAssessor && research.countyAssessor.buildingSqFt && `LA County assessor building size: ${research.countyAssessor.buildingSqFt.toLocaleString()} sq ft`,
+    research.countyAssessor && research.countyAssessor.matchMethod === "nearby parcel address match" && "Assessor match recovered by nearby parcel/address retry",
     research.countyAssessor && !research.countyAssessor.buildingSqFt && `No online building square footage found; Google size search prepared for ${candidate.fullAddress || research.address}`,
     research.countyAssessor && research.countyAssessor.units && `LA County assessor units: ${research.countyAssessor.units}`,
     research.milesFromNorthHollywood !== null && `Approx. miles from North Hollywood: ${research.milesFromNorthHollywood}`,
@@ -720,7 +791,9 @@ function buildUpdateFields(research, existingFields) {
     "Miles From Monterey Park": research.milesFromMontereyPark,
     "Verified Sq Ft": assessor && assessor.buildingSqFt ? assessor.buildingSqFt : null,
     "Sq Ft Source": assessor && assessor.buildingSqFt
-      ? "LA County Assessor public record"
+      ? assessor.matchMethod === "nearby parcel address match"
+        ? "LA County Assessor public record (nearby parcel address match)"
+        : "LA County Assessor public record"
       : "No online building square footage found",
     "Aerial Map URL": candidate.aerialUrl,
     "Aerial Parcel Preview": candidate.aerialUrl ? [{

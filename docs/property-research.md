@@ -8,7 +8,7 @@
 - Falls back to the submitted map address through a public geocoder when CAMS misses a valid directional or numbered street address.
 - Returns a possible AIN/APN candidate and the LA area label.
 - Adds ZIMAS PIN, parcel area, and zoning when the point lands cleanly on one City of Los Angeles parcel.
-- Looks up building square footage, building count, units, use type, and year built from the official LA County assessor parcel layer.
+- Looks up building square footage, building count, units, use type, and year built from the official LA County assessor parcel layer. If the geocoded point lands just outside a parcel, retries nearby parcels and accepts only an address-number/street-name match.
 - Stores a human-facing ZIMAS link and LA County Assessor Portal link; raw ArcGIS query URLs are kept out of the email-facing source field.
 - Generates a public LARIAC aerial preview URL.
 - Generates a second, wider Google Maps context image centered on the property so Anna can see where it sits in greater Los Angeles.
@@ -49,7 +49,7 @@ The CAMS result is an address point, not proof of a particular apartment, suite,
 
 The helper leaves these alone until the property is reviewed when the source data is missing or ambiguous:
 
-- `Verified Sq Ft` is filled from LA County assessor building square footage, never from ZIMAS lot area.
+- `Verified Sq Ft` is filled from LA County assessor building square footage, never from ZIMAS lot area. A nearby-parcel recovery is labeled in `Sq Ft Source` and the research note.
 - `Sq Ft Source` identifies the public source.
 - `Suggested Quote` is filled from the Airtable pricing table when the online size and requested service are usable.
 - `Quote Zone`, `Zone Fee`, and `Multi-Unit Fee` remain pending until Anna's travel and complexity rules are entered.
