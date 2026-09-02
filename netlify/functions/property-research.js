@@ -9,6 +9,7 @@ const ZIMAS_LANDBASE_QUERY_URL = "https://zimas.lacity.org/arcgis/rest/services/
 const ZIMAS_ZONING_QUERY_URL = "https://zimas.lacity.org/arcgis/rest/services/zma/zimas/MapServer/1102/query";
 const COUNTY_PARCEL_QUERY_URL = "https://arcgis.gis.lacounty.gov/arcgis/rest/services/DRP/GISNET_Public/MapServer/333/query";
 const COUNTY_ASSESSOR_PORTAL_URL = "https://portal.assessor.lacounty.gov/parceldetail";
+const NOMINATIM_SEARCH_URL = "https://nominatim.openstreetmap.org/search";
 const NORTH_HOLLYWOOD = { lat: 34.187, lon: -118.3813 };
 const MONTEREY_PARK = { lat: 34.0625, lon: -118.1228 };
 
@@ -105,6 +106,40 @@ async function fetchJson(url, options = {}) {
     throw new Error(message || `Request failed with status ${response.status}`);
   }
   return body;
+}
+
+async function lookupNominatim(address) {
+  const query = clean(address);
+  if (!query) return null;
+
+  const params = new URLSearchParams({
+    q: query,
+    format: "jsonv2",
+    addressdetails: "1",
+    limit: "1",
+    countrycodes: "us"
+  });
+  const sourceUrl = `${NOMINATIM_SEARCH_URL}?${params.toString()}`;
+  const results = await fetchJson(sourceUrl, {
+    headers: {
+      Accept: "application/json",
+      "User-Agent": "FloorPlanDrawings property research (https://floorplandrawings.com)"
+    }
+  });
+  const result = Array.isArray(results) ? results[0] : null;
+  const lat = Number(result && result.lat);
+  const lon = Number(result && result.lon);
+  if (!result || !Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+
+  const addressParts = result.address || {};
+  return {
+    sourceUrl,
+    location: { lat, lon },
+    fullAddress: clean(result.display_name),
+    area: clean(addressParts.suburb || addressParts.neighbourhood || addressParts.city_district || addressParts.city),
+    zip: clean(addressParts.postcode),
+    type: clean(result.type)
+  };
 }
 
 function webMercatorToLatLon(x, y) {
@@ -483,101 +518,113 @@ function addFlags(existing, additions) {
   return [...new Set([...flags, ...additions])];
 }
 
-async function researchAddress(address) {
-  const queryUrl = buildCamsQueryUrl(address);
-  if (!queryUrl) {
-    return {
-      ok: false,
-      status: "Needs Manual Review",
-      reason: "Could not separate a street number and street name from the address.",
-      address: clean(address),
-      candidates: []
-    };
-  }
-
-  const result = await fetchJson(queryUrl);
-  const candidates = uniqueCandidates(result.features);
-
-  if (candidates.length === 0) {
-    return {
-      ok: false,
-      status: "No Match",
-      reason: "No single LA County address point matched the street number and street name.",
-      address: clean(address),
-      sourceUrl: queryUrl,
-      candidates: []
-    };
-  }
-
-  if (candidates.length > 1) {
-    return {
-      ok: false,
-      status: "Needs Manual Review",
-      reason: `More than one address point matched (${candidates.length}).`,
-      address: clean(address),
-      sourceUrl: queryUrl,
-      candidates: candidates.map(({ attributes }) => ({
-        ain: clean(attributes.AIN),
-        fullAddress: clean(attributes.FullAddress)
-      }))
-    };
-  }
-
-  const candidate = candidates[0];
-  const attributes = candidate.attributes;
-  const x = Number(candidate.geometry.x);
-  const y = Number(candidate.geometry.y);
-  const location = Number.isFinite(x) && Number.isFinite(y)
-    ? webMercatorToLatLon(x, y)
-    : null;
-  const area = getArea(attributes);
-  const insideLaCity = /\blos angeles\b/i.test(area);
+async function researchFromLocation(address, source) {
+  const location = source.location;
+  const point = webMercatorFromLatLon(location);
+  const area = clean(source.area);
+  const insideLaCity = /\blos angeles\b/i.test(`${source.fullAddress} ${area}`);
   let zimas = null;
   let countyAssessor = null;
   let aerialUrl = "";
   let contextMapUrl = "";
-  if (Number.isFinite(x) && Number.isFinite(y)) {
-    const [zimasResult, assessorResult, aerialResult] = await Promise.all([
-      lookupZimas(x, y).catch((error) => {
-        console.warn("ZIMAS lookup failed", error.message);
-        return null;
-      }),
-      lookupCountyAssessor(x, y, clean(attributes.AIN)).catch((error) => {
-        console.warn("LA County assessor lookup failed", error.message);
-        return null;
-      }),
-      buildCountyAerialUrl(location).catch((error) => {
-        console.warn("LA County aerial render failed", error.message);
-        return "";
-      })
-    ]);
-    zimas = zimasResult;
-    countyAssessor = assessorResult;
-    aerialUrl = aerialResult;
-    contextMapUrl = buildContextMapUrl(location);
-  }
+  const [zimasResult, assessorResult, aerialResult] = await Promise.all([
+    lookupZimas(point.x, point.y).catch((error) => {
+      console.warn("ZIMAS lookup failed", error.message);
+      return null;
+    }),
+    lookupCountyAssessor(point.x, point.y, clean(source.ain)).catch((error) => {
+      console.warn("LA County assessor lookup failed", error.message);
+      return null;
+    }),
+    buildCountyAerialUrl(location).catch((error) => {
+      console.warn("LA County aerial render failed", error.message);
+      return "";
+    })
+  ]);
+  zimas = zimasResult;
+  countyAssessor = assessorResult;
+  aerialUrl = aerialResult;
+  contextMapUrl = buildContextMapUrl(location);
+
+  const assessorAddress = countyAssessor && countyAssessor.address;
+  const candidate = {
+    ain: clean(source.ain) || clean(countyAssessor && countyAssessor.ain),
+    fullAddress: clean(assessorAddress) || clean(source.fullAddress) || clean(address),
+    area,
+    zip: clean(source.zip),
+    location,
+    aerialUrl: aerialUrl || buildMarkedAerialUrl(location) || buildAerialUrl(point.x, point.y)
+  };
 
   return {
     ok: true,
     status: "Possible Match",
     address: clean(address),
-    sourceUrl: queryUrl,
-    candidate: {
-      ain: clean(attributes.AIN),
-      fullAddress: clean(attributes.FullAddress),
-      area,
-      zip: clean(attributes.ZipCode),
-      location,
-      aerialUrl: aerialUrl || (location
-        ? buildMarkedAerialUrl(location) || buildAerialUrl(x, y)
-        : "")
-    },
+    sourceUrl: source.sourceUrl,
+    candidate,
     milesFromNorthHollywood: location ? roundMiles(milesBetween(location, NORTH_HOLLYWOOD)) : null,
     milesFromMontereyPark: location ? roundMiles(milesBetween(location, MONTEREY_PARK)) : null,
     laCityMatch: insideLaCity ? "Matched" : "Needs Manual Review",
     zimas,
     countyAssessor,
     contextMapUrl
+  };
+}
+
+async function researchAddress(address, options = {}) {
+  const queryUrl = buildCamsQueryUrl(address);
+  const result = queryUrl ? await fetchJson(queryUrl) : { features: [] };
+  const candidates = uniqueCandidates(result.features);
+
+  if (candidates.length === 1) {
+    const candidate = candidates[0];
+    const x = Number(candidate.geometry && candidate.geometry.x);
+    const y = Number(candidate.geometry && candidate.geometry.y);
+    if (Number.isFinite(x) && Number.isFinite(y)) {
+      const attributes = candidate.attributes || {};
+      return researchFromLocation(address, {
+        sourceUrl: queryUrl,
+        location: webMercatorToLatLon(x, y),
+        ain: clean(attributes.AIN),
+        fullAddress: clean(attributes.FullAddress),
+        area: getArea(attributes),
+        zip: clean(attributes.ZipCode)
+      });
+    }
+  }
+
+  // CAMS can miss valid Google/autocomplete addresses, especially directional
+  // numbered streets such as "4000 W Avenue 42". Use the submitted address as
+  // a coordinate fallback, then verify the location against county records.
+  const fallback = await lookupNominatim(clean(options.mapQuery) || clean(address)).catch((error) => {
+    console.warn("Address geocoder fallback failed", error.message);
+    return null;
+  });
+  if (fallback && ["house", "building", "residential"].includes(fallback.type)) {
+    return researchFromLocation(address, fallback);
+  }
+
+  if (candidates.length === 0) {
+    return {
+      ok: false,
+      status: "No Match",
+      reason: "No single LA County address point or fallback geocoder result matched the address.",
+      address: clean(address),
+      sourceUrl: queryUrl,
+      candidates: []
+    };
+  }
+
+  return {
+    ok: false,
+    status: "Needs Manual Review",
+    reason: `More than one address point matched (${candidates.length}).`,
+    address: clean(address),
+    sourceUrl: queryUrl,
+    candidates: candidates.map(({ attributes }) => ({
+      ain: clean(attributes.AIN),
+      fullAddress: clean(attributes.FullAddress)
+    }))
   };
 }
 
@@ -760,7 +807,9 @@ exports.handler = async (event) => {
         return json(400, { ok: false, error: "The Airtable record has no property address" });
       }
 
-      const research = await researchAddress(recordAddress);
+      const research = await researchAddress(recordAddress, {
+        mapQuery: record.fields && record.fields["Map Query"]
+      });
       const updated = await updateAirtableRecord(
         baseId,
         tableName,
@@ -781,7 +830,9 @@ exports.handler = async (event) => {
   }
 
   try {
-    const research = await researchAddress(address);
+    const research = await researchAddress(address, {
+      mapQuery: input.mapQuery || address
+    });
     return json(200, { ok: true, research });
   } catch (error) {
     console.error("Property research preview failed", error.message);

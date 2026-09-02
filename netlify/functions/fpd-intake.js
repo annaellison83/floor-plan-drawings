@@ -464,7 +464,9 @@ function calculateSuggestedQuote(fields, research, pricingRows) {
 
 async function enrichCreatedRecord(recordUrl, token, fields, workflow, baseId, pricingTable) {
   try {
-    const research = await researchAddress(fields["Property Address"]);
+    const research = await researchAddress(fields["Property Address"], {
+      mapQuery: fields["Map Query"]
+    });
     const researchFields = buildUpdateFields(research, fields);
     let quoteFields = {};
     try {

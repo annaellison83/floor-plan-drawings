@@ -5,6 +5,7 @@
 ## What it does
 
 - Searches the public LA County CAMS address-point layer.
+- Falls back to the submitted map address through a public geocoder when CAMS misses a valid directional or numbered street address.
 - Returns a possible AIN/APN candidate and the LA area label.
 - Adds ZIMAS PIN, parcel area, and zoning when the point lands cleanly on one City of Los Angeles parcel.
 - Looks up building square footage, building count, units, use type, and year built from the official LA County assessor parcel layer.
