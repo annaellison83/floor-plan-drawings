@@ -10,11 +10,12 @@
 - Looks up building square footage, building count, units, use type, and year built from the official LA County assessor parcel layer.
 - Stores a human-facing ZIMAS link and LA County Assessor Portal link; raw ArcGIS query URLs are kept out of the email-facing source field.
 - Generates a public LARIAC aerial preview URL.
+- Generates a second, wider Google Maps context image centered on the property so Anna can see where it sits in greater Los Angeles.
 - Estimates straight-line miles from North Hollywood and Monterey Park.
 - Calculates a suggested internal price from the Airtable `Quote Pricing` table when online building square footage and a recognized service are available.
 - Marks uncertain, missing-size, out-of-band, or unpriced jobs for manual review.
 
-The address lookup uses [CAMS address points](https://arcgis.gis.lacounty.gov/arcgis/rest/services/LACounty_Dynamic/CAMS/MapServer/1). Parcel and zoning context comes from the [ZIMAS landbase service](https://zimas.lacity.org/arcgis/rest/services/zma/zimas/MapServer/105) and [ZIMAS zoning service](https://zimas.lacity.org/arcgis/rest/services/zma/zimas/MapServer/1102). Building size comes from the [LA County parcel boundary service](https://arcgis.gis.lacounty.gov/arcgis/rest/services/DRP/GISNET_Public/MapServer/333), whose assessor fields include building square footage. The aerial preview uses LA County's public 2023 imagery layer rendered through ArcGIS.
+The address lookup uses [CAMS address points](https://arcgis.gis.lacounty.gov/arcgis/rest/services/LACounty_Dynamic/CAMS/MapServer/1). Parcel and zoning context comes from the [ZIMAS landbase service](https://zimas.lacity.org/arcgis/rest/services/zma/zimas/MapServer/105) and [ZIMAS zoning service](https://zimas.lacity.org/arcgis/rest/services/zma/zimas/MapServer/1102). Building size comes from the [LA County parcel boundary service](https://arcgis.gis.lacounty.gov/arcgis/rest/services/DRP/GISNET_Public/MapServer/333), whose assessor fields include building square footage. The close aerial preview uses LA County's public 2023 imagery layer rendered through ArcGIS; the wider context preview uses Google Maps Static API when `GOOGLE_MAPS_STATIC_KEY` is configured.
 
 ## Read-only preview
 

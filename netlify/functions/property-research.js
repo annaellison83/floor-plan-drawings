@@ -155,6 +155,26 @@ function buildMarkedAerialUrl(location) {
   return `${GOOGLE_STATIC_MAP_URL}?${params.toString()}`;
 }
 
+function buildContextMapUrl(location) {
+  const key = cleanEnv(process.env.GOOGLE_MAPS_STATIC_KEY);
+  if (!key || !location) return "";
+
+  const point = `${location.lat},${location.lon}`;
+  const params = new URLSearchParams({
+    center: point,
+    zoom: "10",
+    size: "640x420",
+    scale: "2",
+    maptype: "roadmap",
+    markers: `color:red|label:P|${point}`,
+    key
+  });
+  params.append("style", "feature:all|saturation:-85|lightness:5");
+  params.append("style", "feature:poi|visibility:off");
+  params.append("style", "feature:transit|visibility:off");
+  return `${GOOGLE_STATIC_MAP_URL}?${params.toString()}`;
+}
+
 function webMercatorFromLatLon(location) {
   const radius = 6378137;
   return {
@@ -508,6 +528,7 @@ async function researchAddress(address) {
   let zimas = null;
   let countyAssessor = null;
   let aerialUrl = "";
+  let contextMapUrl = "";
   if (Number.isFinite(x) && Number.isFinite(y)) {
     const [zimasResult, assessorResult, aerialResult] = await Promise.all([
       lookupZimas(x, y).catch((error) => {
@@ -526,6 +547,7 @@ async function researchAddress(address) {
     zimas = zimasResult;
     countyAssessor = assessorResult;
     aerialUrl = aerialResult;
+    contextMapUrl = buildContextMapUrl(location);
   }
 
   return {
@@ -547,7 +569,8 @@ async function researchAddress(address) {
     milesFromMontereyPark: location ? roundMiles(milesBetween(location, MONTEREY_PARK)) : null,
     laCityMatch: insideLaCity ? "Matched" : "Needs Manual Review",
     zimas,
-    countyAssessor
+    countyAssessor,
+    contextMapUrl
   };
 }
 
@@ -569,6 +592,7 @@ function researchNote(research) {
     research.milesFromNorthHollywood !== null && `Approx. miles from North Hollywood: ${research.milesFromNorthHollywood}`,
     research.milesFromMontereyPark !== null && `Approx. miles from Monterey Park: ${research.milesFromMontereyPark}`,
     candidate.aerialUrl && "Aerial preview: LA County 2023 imagery with address labels",
+    research.contextMapUrl && "LA context map: Google Maps road map centered on the property",
     "Review duplexes, apartments, suites, and unusual sub-addresses manually even when ZIMAS returns one parcel."
   ].filter(Boolean).join("\n");
 }
@@ -615,6 +639,7 @@ function buildUpdateFields(research, existingFields) {
     .replace(/[^A-Za-z0-9]+/g, "-")
     .replace(/^-|-$/g, "")
     .slice(0, 80) || "property";
+  const contextMapFilename = `la-context-${aerialFilename}.jpg`;
   const propertyStatus = hasParcel && !needsUnitReview ? "Matched" : "Possible Match";
   return {
     ...baseFields,
@@ -635,6 +660,11 @@ function buildUpdateFields(research, existingFields) {
     "Aerial Parcel Preview": candidate.aerialUrl ? [{
       url: candidate.aerialUrl,
       filename: `aerial-${aerialFilename}.jpg`
+    }] : [],
+    "LA Context Map URL": research.contextMapUrl,
+    "LA Context Map Preview": research.contextMapUrl ? [{
+      url: research.contextMapUrl,
+      filename: contextMapFilename
     }] : [],
     "ZIMAS Link": zimasPublicUrl,
     "Property Data Source URL": publicDataUrl,
@@ -755,3 +785,4 @@ exports.handler = async (event) => {
 exports.researchAddress = researchAddress;
 exports.buildUpdateFields = buildUpdateFields;
 exports.buildCountyAerialUrl = buildCountyAerialUrl;
+exports.buildContextMapUrl = buildContextMapUrl;
