@@ -52,7 +52,7 @@ The helper leaves these alone until the property is reviewed when the source dat
 - `Verified Sq Ft` is filled from LA County assessor building square footage, never from ZIMAS lot area. A nearby-parcel recovery is labeled in `Sq Ft Source` and the research note.
 - `Sq Ft Source` identifies the public source.
 - `Suggested Quote` is filled from the Airtable pricing table when the online size and requested service are usable.
-- `Quote Zone`, `Zone Fee`, and `Multi-Unit Fee` remain pending until Anna's travel and complexity rules are entered.
+- `Quote Zone` uses Anna's four travel zones. Zone minimums are $200, $230, $260, and $300 for Zones 1-4. The minimum is a floor, not an add-on: the final preview uses the greater of the size/service price and the zone minimum.
 
 `Lot Size` is parcel area from ZIMAS. It is not the building's livable square footage and must not be used as the quote size.
 

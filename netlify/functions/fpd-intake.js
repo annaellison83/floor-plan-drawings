@@ -363,6 +363,18 @@ function quoteStyle(value) {
   return "";
 }
 
+const ZONE_MINIMUMS = {
+  "1": 200,
+  "2": 230,
+  "3": 260,
+  "4": 300
+};
+
+function quoteZoneNumber(value) {
+  const match = clean(value).match(/(?:zone|z)?\s*([1-4])\b/i);
+  return match ? match[1] : "";
+}
+
 function isComplexProperty(fields) {
   const text = [
     fields["Property Type"],
@@ -460,7 +472,14 @@ function calculateSuggestedQuote(fields, research, pricingRows) {
   }
   const complex = isComplexProperty(fields);
   if (complex) notes.push("Multi-unit/commercial/partial-scope adjustment is pending Anna's fee rule");
-  notes.push("Travel zone and fee are pending Anna's zone chart");
+  const zoneNumber = quoteZoneNumber(fields["Quote Zone"]);
+  const zoneMinimum = zoneNumber ? ZONE_MINIMUMS[zoneNumber] : null;
+  if (zoneMinimum) {
+    suggested = Math.max(suggested, zoneMinimum);
+    notes.push(`Zone ${zoneNumber} minimum: $${zoneMinimum} (minimum, not an add-on)`);
+  } else {
+    notes.push("Set Quote Zone to Zone 1, 2, 3, or 4; the zone minimum is a floor, not an add-on");
+  }
 
   return {
     fields: {
