@@ -6,6 +6,13 @@ const { quoteReadyEmail } = require("./email-templates");
 
 const PORT = Number(process.env.PORT) || 10000;
 const SERVICE_NAME = "floorplan-drawings-backend";
+const TEST_PROPERTY_ADDRESSES = [
+  "2800 E Observatory Rd, Los Angeles, CA 90027",
+  "5905 Wilshire Blvd, Los Angeles, CA 90036",
+  "221 S Grand Ave, Los Angeles, CA 90012",
+  "4700 Western Heritage Way, Los Angeles, CA 90027",
+  "1418 Descanso Dr, La Canada Flintridge, CA 91011"
+];
 
 function clean(value) {
   return value === undefined || value === null ? "" : String(value).trim();
@@ -33,6 +40,47 @@ function integrationStatus() {
     icloud: Boolean(process.env.ICLOUD_EMAIL && process.env.ICLOUD_APP_PASSWORD),
     googleMaps: Boolean(process.env.GOOGLE_MAPS_STATIC_KEY || process.env.GOOGLE_MAPS_SERVER_KEY),
     postgres: Boolean(process.env.DATABASE_URL)
+  };
+}
+
+async function buildTestQuote() {
+  const address = TEST_PROPERTY_ADDRESSES[Math.floor(Math.random() * TEST_PROPERTY_ADDRESSES.length)];
+  const endpoint = clean(process.env.PROPERTY_RESEARCH_URL)
+    || "https://floorplandrawings.com/.netlify/functions/property-research";
+  const requestUrl = new URL(endpoint);
+  requestUrl.searchParams.set("address", address);
+
+  const response = await fetch(requestUrl, { headers: { Accept: "application/json" } });
+  const body = await response.json().catch(() => ({}));
+  const research = body.research;
+  if (!response.ok || !research || !research.ok) {
+    throw new Error("Read-only property research did not return a single usable location");
+  }
+
+  const candidate = research.candidate || {};
+  const assessor = research.countyAssessor || {};
+  return {
+    propertyAddress: candidate.fullAddress || address,
+    clientName: "Eric Greenburg",
+    clientEmail: "ericreenburg@gmail.com",
+    clientPhone: "909-921-7490",
+    service: "Color Interior + Exterior",
+    milesFromNorthHollywood: research.milesFromNorthHollywood,
+    milesFromMontereyPark: research.milesFromMontereyPark,
+    verifiedSqFt: assessor.buildingSqFt || null,
+    suggestedQuote: 345,
+    tourRequested: "No",
+    status: "TEST MODE — no Airtable record changed",
+    mapUrl: candidate.aerialUrl,
+    contextMapUrl: research.contextMapUrl,
+    quoteNotes: [
+      "TEST EMAIL — layout and delivery check only",
+      "This address was randomly selected from a list of public Los Angeles landmarks.",
+      assessor.buildingSqFt ? `Online size: ${Number(assessor.buildingSqFt).toLocaleString()} sq ft` : "Online size needs verification",
+      `Approx. miles from North Hollywood: ${research.milesFromNorthHollywood}`,
+      `Approx. miles from Monterey Park: ${research.milesFromMontereyPark}`,
+      "The aerial and context map were generated live through the read-only property-research endpoint."
+    ].join("\n")
   };
 }
 
@@ -114,25 +162,9 @@ async function route(req, res) {
     const recipient = clean(process.env.SMTP_USER);
     if (!recipient) return json(res, 503, { error: "SMTP_USER is not configured" });
 
-    const sample = quoteReadyEmail({
-      propertyAddress: "349 Mount Washington Dr, Los Angeles, CA 90065",
-      service: "Color Interior + Exterior",
-      milesFromNorthHollywood: 11.5,
-      milesFromMontereyPark: 5.7,
-      verifiedSqFt: 784,
-      suggestedQuote: 345,
-      tourRequested: "No",
-      status: "TEST MODE — no Airtable record changed",
-      quoteNotes: [
-        "TEST EMAIL — layout and delivery check only",
-        "Online size: 784 sq ft",
-        "Pricing row: Up to 1,500 sq ft",
-        "Base service: Color interior + exterior ($345)",
-        "Automatically resolved as Zone 1 from the nearer service hub"
-      ].join("\n")
-    });
-
     try {
+      const sampleJob = await buildTestQuote();
+      const sample = quoteReadyEmail(sampleJob);
       const delivery = await sendMail({
         to: recipient,
         subject: `[TEST — NO WORKFLOW] ${sample.subject}`,
