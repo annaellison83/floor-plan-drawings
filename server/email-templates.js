@@ -1,3 +1,5 @@
+const { resolveQuoteZone } = require("./quote-zone");
+
 function text(value, fallback = "—") {
   const cleaned = value === undefined || value === null ? "" : String(value).trim();
   return cleaned || fallback;
@@ -31,19 +33,13 @@ function money(value) {
     : "Needs review";
 }
 
-const ZONE_MINIMUMS = { 1: 200, 2: 230, 3: 260, 4: 300 };
-
-function quoteZoneNumber(value) {
-  const match = text(value, "").match(/(?:zone|z)?\s*([1-4])\b/i);
-  return match ? Number(match[1]) : null;
-}
-
 function quotePricing(job) {
-  const zoneNumber = quoteZoneNumber(job.quoteZone);
-  const zoneMinimum = zoneNumber ? ZONE_MINIMUMS[zoneNumber] : null;
+  const resolvedZone = resolveQuoteZone(job);
+  const zoneNumber = resolvedZone.zoneNumber;
+  const zoneMinimum = resolvedZone.minimum;
   const basePrice = Number(job.baseServiceQuote ?? job.suggestedQuote);
   const finalPrice = Number.isFinite(basePrice) ? Math.max(basePrice, zoneMinimum || 0) : null;
-  return { zoneNumber, zoneMinimum, basePrice, finalPrice };
+  return { ...resolvedZone, zoneMinimum, basePrice, finalPrice };
 }
 
 function detail(label, value) {
@@ -62,12 +58,12 @@ function imageCard(number, label, imageUrl, linkUrl) {
 
 function quoteReadyEmail(job) {
   const address = text(job.propertyAddress);
-  const zone = text(job.quoteZone, "Needs zone assignment");
+  const pricing = quotePricing(job);
+  const zone = pricing.zoneLabel;
   const recordUrl = safeUrl(job.recordUrl);
   const approvalUrl = safeUrl(job.approvalUrl);
   const mapUrl = safeUrl(job.mapUrl);
   const contextMapUrl = safeUrl(job.contextMapUrl);
-  const pricing = quotePricing(job);
   const subject = `QUOTE READY | Review: ${address}`;
 
   const html = `<!doctype html>

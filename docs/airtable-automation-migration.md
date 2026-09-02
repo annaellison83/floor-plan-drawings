@@ -64,6 +64,23 @@ Required top labels:
 The scheduled follow-up job must run at 8:00 AM America/Los_Angeles and must
 not send an empty digest.
 
+## Provisional quote-zone resolver
+
+The supplied service-area image is a hand-drawn guide rather than a GIS file.
+Until Anna supplies exact boundaries, Render approximates it using the nearer
+of the North Hollywood and Monterey Park hubs:
+
+- Zone 1: up to 8 miles; $200 minimum
+- Zone 2: over 8 and up to 15 miles; $230 minimum
+- Zone 3: over 15 and up to 24 miles; $260 minimum
+- Zone 4: over 24 and up to 35 miles; $300 minimum
+
+Locations within one mile of a boundary are marked for review. Locations more
+than 35 miles from both hubs are marked outside the mapped service area. A
+manual `Quote Zone` value in Airtable always overrides the approximation. Zone
+pricing remains a floor: `max(service/size price, zone minimum)`, never a fee
+added to the service price.
+
 ## Safe cutover order
 
 1. AI note translation (no external message)
@@ -91,4 +108,3 @@ Secrets belong in Render, not GitHub:
 
 The Airtable PAT is scoped only to the Floor Plan Drawings Command Center base
 with `data.records:read`, `data.records:write`, and `schema.bases:read`.
-
