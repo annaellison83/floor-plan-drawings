@@ -31,6 +31,13 @@ function tagValue(xml, tagName) {
   return match ? clean(match[1].replace(/<[^>]+>/g, "")) : "";
 }
 
+function nestedHref(xml, containerTag) {
+  const container = xml.match(
+    new RegExp(`<[^>]*${containerTag}[^>]*>([\\s\\S]*?)</[^>]*${containerTag}>`, "i")
+  );
+  return container ? tagValue(container[1], "href") : "";
+}
+
 function responseBlocks(xml) {
   return xml.match(/<[^>]*response[^>]*>[\s\S]*?<\/[^>]*response>/gi) || [];
 }
@@ -91,7 +98,7 @@ async function discoverCalendars({ email, password }) {
     requestBody("<d:current-user-principal/><d:principal-URL/>")
   );
   const principalHref = absoluteHref(
-    tagValue(principalXml, "href"),
+    nestedHref(principalXml, "current-user-principal") || nestedHref(principalXml, "principal-URL"),
     CALDAV_URL
   );
   if (!principalHref) throw new Error("iCloud did not return a calendar principal");
@@ -103,7 +110,7 @@ async function discoverCalendars({ email, password }) {
     requestBody("<c:calendar-home-set/>")
   );
   const calendarHomeHref = absoluteHref(
-    tagValue(principalXmlDetails, "href"),
+    nestedHref(principalXmlDetails, "calendar-home-set"),
     principalHref
   );
   if (!calendarHomeHref) throw new Error("iCloud did not return a calendar home");
