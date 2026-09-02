@@ -1,4 +1,5 @@
 const AIRTABLE_API_URL = "https://api.airtable.com/v0";
+const crypto = require("crypto");
 const { researchAddress, buildUpdateFields } = require("./property-research");
 
 const corsHeaders = {
@@ -30,6 +31,10 @@ function cleanAirtableToken(value) {
     .replace(/^Bearer\s+/i, "")
     .replace(/^["']|["']$/g, "")
     .trim();
+}
+
+function buildQuoteApprovalToken() {
+  return crypto.randomBytes(24).toString("hex");
 }
 
 function parseSquareFeet(value) {
@@ -226,6 +231,10 @@ function buildAirtableFields(data) {
     "Original Request": JSON.stringify(summary, null, 2),
     "Property Check Status": "Not Checked",
     "LA City Match Status": "Not Checked",
+    ...(workflow === "Quick Quote" ? {
+      "Quote Approval Token": buildQuoteApprovalToken(),
+      "Quote Approval Expires At": new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
+    } : {}),
     "Anna Decision": "Pending",
     "Client Response": "Awaiting Reply",
     "Client Email Style": "Standard",
