@@ -371,6 +371,13 @@ function buildGoogleMapsSearchUrl(address) {
     : "";
 }
 
+function buildGoogleSqFtSearchUrl(address) {
+  const value = clean(address);
+  return value
+    ? `https://www.google.com/search?q=${encodeURIComponent(`${value} square footage`)}`
+    : "";
+}
+
 function buildAssessorPublicUrl(ain) {
   const value = clean(ain).replace(/[^0-9]/g, "");
   return value ? `${COUNTY_ASSESSOR_PORTAL_URL}/${value}` : "";
@@ -642,6 +649,7 @@ function researchNote(research) {
     research.zimas && research.zimas.parcel && `ZIMAS PIN: ${research.zimas.parcel.pin || "not provided"}`,
     research.zimas && research.zimas.zoning && `ZIMAS zoning: ${research.zimas.zoning}`,
     research.countyAssessor && research.countyAssessor.buildingSqFt && `LA County assessor building size: ${research.countyAssessor.buildingSqFt.toLocaleString()} sq ft`,
+    research.countyAssessor && !research.countyAssessor.buildingSqFt && `No online building square footage found; Google size search prepared for ${candidate.fullAddress || research.address}`,
     research.countyAssessor && research.countyAssessor.units && `LA County assessor units: ${research.countyAssessor.units}`,
     research.milesFromNorthHollywood !== null && `Approx. miles from North Hollywood: ${research.milesFromNorthHollywood}`,
     research.milesFromMontereyPark !== null && `Approx. miles from Monterey Park: ${research.milesFromMontereyPark}`,
@@ -654,6 +662,9 @@ function researchNote(research) {
 function buildUpdateFields(research, existingFields) {
   const note = researchNote(research);
   const currentNotes = clean(existingFields["Quote Calculation Notes"]);
+  const searchAddress = research.candidate && research.candidate.fullAddress
+    ? research.candidate.fullAddress
+    : research.address || existingFields["Property Address"];
   const baseFields = {
     "Property Check Status": research.status,
     // Keep raw GIS query endpoints internal; they open as JSON/code in a browser.
@@ -661,6 +672,7 @@ function buildUpdateFields(research, existingFields) {
       ? research.sourceUrl || ""
       : buildGoogleMapsSearchUrl(research.address || existingFields["Property Address"]),
     "Quote Calculation Notes": [currentNotes, note].filter(Boolean).join("\n\n"),
+    "Google Sq Ft Search URL": buildGoogleSqFtSearchUrl(searchAddress),
     "Property Research Complete": true
   };
 
