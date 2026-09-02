@@ -23,19 +23,17 @@ The likely fix is therefore in the Airtable automation's deployed configuration,
 ## Connector status
 
 - Gmail connector installed locally, but Google authentication is incomplete. Do not request or paste the Gmail password or tokens into chat.
-- Airtable connector installed locally, but its account connection still needs to be completed before inspecting automations.
-- Netlify connector installed locally; its account connection still needs to be completed before inspecting deploys or environment settings.
-- The legacy `airtable-mcp` CLI is not installed on this Mac; use the official Airtable connector when it is available in a refreshed Codex session.
+- Airtable CLI authentication is verified with a PAT restricted to the Floor Plan Drawings Command Center base. The automation audit is recorded in `docs/airtable-automation-migration.md`.
+- Netlify CLI authentication is verified as Anna on the `FPD` team, and this checkout is linked to the existing `floorplandrawings` site. No deploy was triggered.
+- The Airtable and Netlify Codex plugins are installed. Their in-app OAuth connectors are separate from the verified CLI sessions.
 
 ## Next safe steps
 
-1. Start a fresh Codex session (or reload the app) so the newly installed Airtable and Netlify connector tools are exposed.
-2. Connect Airtable as Anna and verify access to the Floor Plan Drawings Command Center base; connect Netlify and verify the existing site/functions.
-3. Audit the `NEW REQUEST`, `QUOTE READY`, `PROPERTY REVIEW NEEDED`, `FOLLOW-UP`, and approved client quote automations. Capture each trigger, condition, field update, schedule, message body, and sender.
-4. Implement equivalent, idempotent Render jobs that read/write Airtable and send through the approved mail sender. Keep the existing Airtable automations enabled while testing.
-5. Add a dry-run/replay path and communication log so each Airtable record can be tested without duplicate sends.
-6. Compare Render output with the deployed Airtable versions, then cut over one workflow at a time. Do not disable Airtable automations until parity and rollback checks pass.
-7. Keep Gmail access optional until mailbox-level verification is needed; the migration can initially use the configured Airtable/approved sender.
+1. Select the Render mail provider and add its credentials directly in Render.
+2. Implement equivalent, idempotent Render jobs that read/write Airtable and send through the approved mail sender. Keep the existing Airtable automations enabled while testing.
+3. Add a dry-run/replay path and communication log so each Airtable record can be tested without duplicate sends.
+4. Compare Render output with the deployed Airtable versions, then cut over one workflow at a time. Do not disable Airtable automations until parity and rollback checks pass.
+5. Keep Gmail connector access optional until mailbox-level verification is needed.
 
 ## Security constraints
 
