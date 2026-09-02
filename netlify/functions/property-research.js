@@ -58,8 +58,15 @@ function parseAddress(address) {
     .filter(Boolean)
     .slice(0, 6);
   const roadTypeIndex = allStreetWords.findIndex((word) => /^(alley|avenue|ave|boulevard|blvd|circle|court|ct|drive|dr|highway|hwy|lane|ln|parkway|pkwy|place|pl|road|rd|street|st|terrace|ter|trail|trl|way|wy)$/i.test(word));
-  const streetWords = (roadTypeIndex > 0 ? allStreetWords.slice(0, roadTypeIndex) : allStreetWords)
-    .slice(0, 4);
+  const wordsThroughRoadType = roadTypeIndex > 0
+    ? roadTypeIndex + 1
+    : allStreetWords.length;
+  // Keep numbered road names such as "W Ave 42" together; dropping the number
+  // makes the county lookup match many unrelated address points.
+  const numberedRoadSuffix = roadTypeIndex >= 0 && /\d/.test(allStreetWords[roadTypeIndex + 1] || "") ? 1 : 0;
+  const streetWords = allStreetWords
+    .slice(0, Math.min(allStreetWords.length, wordsThroughRoadType + numberedRoadSuffix))
+    .slice(0, 5);
 
   return {
     normalized,
