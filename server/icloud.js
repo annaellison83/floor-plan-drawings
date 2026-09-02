@@ -53,7 +53,7 @@ function hrefs(xml) {
 }
 
 function hasCalendarResource(xml) {
-  return /<(?:[^:>]+:)?calendar\s*(?:\/|>)/i.test(xml)
+  return /<(?:[^:>]+:)?calendar(?:\s[^>]*)?(?:\/|>)/i.test(xml)
     && !/<(?:[^:>]+:)?calendar-home-set/i.test(xml);
 }
 
