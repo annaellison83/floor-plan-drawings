@@ -1,5 +1,6 @@
 const http = require("node:http");
 const { discoverCalendars } = require("./icloud");
+const { buildRoster } = require("./calendar-roster");
 
 const PORT = Number(process.env.PORT) || 10000;
 const SERVICE_NAME = "floorplan-drawings-backend";
@@ -66,6 +67,26 @@ async function route(req, res) {
     } catch (error) {
       return json(res, 502, {
         error: "iCloud calendar discovery failed",
+        detail: error.message
+      });
+    }
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/icloud/roster") {
+    if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+
+    try {
+      const result = await discoverCalendars({
+        email: clean(process.env.ICLOUD_EMAIL),
+        password: clean(process.env.ICLOUD_APP_PASSWORD)
+      });
+      return json(res, 200, {
+        calendarHomeUrl: result.calendarHomeUrl,
+        ...buildRoster(result.calendars)
+      });
+    } catch (error) {
+      return json(res, 502, {
+        error: "iCloud calendar roster failed",
         detail: error.message
       });
     }

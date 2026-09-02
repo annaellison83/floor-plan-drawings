@@ -25,3 +25,11 @@ The iCloud endpoint is:
 
 Send the admin token in the `X-Admin-Token` header. The endpoint returns
 calendar names and CalDAV URLs, but never returns the iCloud password.
+
+The read-only roster endpoint is:
+
+`GET /api/icloud/roster`
+
+The roster classifies `anna` as the owner calendar, `corrie`, `sarah`, and
+`ricardo` as worker calendars, and excludes `Home` and `Reminders` from
+booking. It does not create or modify events.
