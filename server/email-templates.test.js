@@ -19,11 +19,17 @@ test("quote ready template escapes all dynamic HTML", () => {
 });
 
 test("quote ready template is wide on desktop and stacks on mobile", () => {
-  const { html } = quoteReadyEmail({ propertyAddress: "349 Mount Washington Dr", suggestedQuote: 345 });
+  const { html } = quoteReadyEmail({
+    propertyAddress: "349 Mount Washington Dr",
+    suggestedQuote: 345,
+    mapUrl: "https://example.com/aerial.jpg"
+  });
   assert.match(html, /max-width:1100px/);
   assert.match(html, /@media only screen and \(max-width:640px\)/);
-  assert.match(html, /\.summary tr,\.summary td\{display:block/);
+  assert.match(html, /\.summary tr,\.detail-cell\{display:block/);
   assert.match(html, /text-align:center/);
+  assert.match(html, /max-width:100%/);
+  assert.match(html, /class="detail-cell"[^>]*><div class="detail">/);
 });
 
 test("zone pricing uses the minimum as a floor, not an add-on", () => {
