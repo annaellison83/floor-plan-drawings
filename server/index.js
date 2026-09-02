@@ -7,11 +7,13 @@ const { quoteReadyEmail } = require("./email-templates");
 const PORT = Number(process.env.PORT) || 10000;
 const SERVICE_NAME = "floorplan-drawings-backend";
 const TEST_PROPERTY_ADDRESSES = [
-  "2800 E Observatory Rd, Los Angeles, CA 90027",
-  "5905 Wilshire Blvd, Los Angeles, CA 90036",
-  "221 S Grand Ave, Los Angeles, CA 90012",
-  "4700 Western Heritage Way, Los Angeles, CA 90027",
-  "1418 Descanso Dr, La Canada Flintridge, CA 91011"
+  "349 Mount Washington Dr, Los Angeles, CA 90065",
+  "3960 Verdugo View Dr, Los Angeles, CA 90065",
+  "2630 Delevan Dr, Los Angeles, CA 90065",
+  "4968 Vincent Ave, Los Angeles, CA 90041",
+  "3842 Cazador St, Los Angeles, CA 90065",
+  "4011 Scandia Way, Los Angeles, CA 90065",
+  "2750 Medlow Ave, Los Angeles, CA 90065"
 ];
 
 function clean(value) {
@@ -44,17 +46,28 @@ function integrationStatus() {
 }
 
 async function buildTestQuote() {
-  const address = TEST_PROPERTY_ADDRESSES[Math.floor(Math.random() * TEST_PROPERTY_ADDRESSES.length)];
   const endpoint = clean(process.env.PROPERTY_RESEARCH_URL)
     || "https://floorplandrawings.com/.netlify/functions/property-research";
-  const requestUrl = new URL(endpoint);
-  requestUrl.searchParams.set("address", address);
+  const shuffled = [...TEST_PROPERTY_ADDRESSES].sort(() => Math.random() - 0.5);
+  let research = null;
+  let address = "";
 
-  const response = await fetch(requestUrl, { headers: { Accept: "application/json" } });
-  const body = await response.json().catch(() => ({}));
-  const research = body.research;
-  if (!response.ok || !research || !research.ok) {
-    throw new Error("Read-only property research did not return a single usable location");
+  for (const candidateAddress of shuffled) {
+    const requestUrl = new URL(endpoint);
+    requestUrl.searchParams.set("address", candidateAddress);
+    const response = await fetch(requestUrl, { headers: { Accept: "application/json" } });
+    const body = await response.json().catch(() => ({}));
+    const candidateResearch = body.research;
+    if (response.ok && candidateResearch && candidateResearch.ok
+      && Number(candidateResearch.countyAssessor && candidateResearch.countyAssessor.buildingSqFt) > 0) {
+      research = candidateResearch;
+      address = candidateAddress;
+      break;
+    }
+  }
+
+  if (!research) {
+    throw new Error("No test address returned assessor-verified building square footage; no email was sent");
   }
 
   const candidate = research.candidate || {};
