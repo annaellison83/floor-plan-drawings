@@ -76,7 +76,7 @@ function quoteReadyEmail(job) {
   const approvalUrl = safeUrl(job.approvalUrl);
   const mapUrl = safeUrl(job.mapUrl);
   const contextMapUrl = safeUrl(job.contextMapUrl);
-  const subject = `QUOTE READY | Review: ${address}`;
+  const subject = `QUOTE READY | ${address}`;
 
   const html = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>

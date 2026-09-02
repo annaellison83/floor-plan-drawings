@@ -16,6 +16,8 @@ test("quote ready template escapes all dynamic HTML", () => {
   assert.match(rendered.html, /&lt;script&gt;/);
   assert.doesNotMatch(rendered.html, /a\.jpg" style=/);
   assert.match(rendered.html, /token=abc&amp;record=123/);
+  assert.equal(rendered.subject, 'QUOTE READY | 349 Mount Washington <script>alert("x")</script>');
+  assert.doesNotMatch(rendered.subject, /Review:/);
 });
 
 test("quote ready template is wide on desktop and stacks on mobile", () => {
