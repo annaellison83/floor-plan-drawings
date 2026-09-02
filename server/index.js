@@ -1,6 +1,7 @@
 const http = require("node:http");
 const { discoverCalendars } = require("./icloud");
 const { buildRoster } = require("./calendar-roster");
+const { isSmtpConfigured, verifySmtp } = require("./mail");
 
 const PORT = Number(process.env.PORT) || 10000;
 const SERVICE_NAME = "floorplan-drawings-backend";
@@ -27,6 +28,7 @@ function isAuthorized(req) {
 function integrationStatus() {
   return {
     airtable: Boolean(process.env.AIRTABLE_TOKEN && process.env.AIRTABLE_BASE_ID),
+    gmailSmtp: isSmtpConfigured(),
     icloud: Boolean(process.env.ICLOUD_EMAIL && process.env.ICLOUD_APP_PASSWORD),
     googleMaps: Boolean(process.env.GOOGLE_MAPS_STATIC_KEY || process.env.GOOGLE_MAPS_SERVER_KEY),
     postgres: Boolean(process.env.DATABASE_URL)
@@ -87,6 +89,19 @@ async function route(req, res) {
     } catch (error) {
       return json(res, 502, {
         error: "iCloud calendar roster failed",
+        detail: error.message
+      });
+    }
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/email/verify") {
+    if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+
+    try {
+      return json(res, 200, await verifySmtp());
+    } catch (error) {
+      return json(res, 502, {
+        error: "Gmail SMTP verification failed",
         detail: error.message
       });
     }
