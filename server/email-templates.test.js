@@ -33,6 +33,8 @@ test("quote ready template is wide on desktop and stacks on mobile", () => {
   assert.match(html, /class="property-head"/);
   assert.match(html, /https:\/\/www\.google\.com\/maps\/search/);
   assert.match(html, /color:#0b57d0/);
+  assert.doesNotMatch(html, /class="badge"/);
+  assert.match(html, /class="eyebrow section-title">QUOTE READY/);
 });
 
 test("zone pricing uses the minimum as a floor, not an add-on", () => {
