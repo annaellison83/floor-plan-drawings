@@ -42,4 +42,15 @@ async function verifySmtp() {
   };
 }
 
-module.exports = { isSmtpConfigured, verifySmtp };
+async function sendMail(message) {
+  const transport = createTransport();
+  const from = clean(process.env.MAIL_FROM) || clean(process.env.SMTP_USER);
+  const result = await transport.sendMail({ from, ...message });
+
+  return {
+    accepted: Array.isArray(result.accepted) ? result.accepted.length : 0,
+    messageId: result.messageId
+  };
+}
+
+module.exports = { isSmtpConfigured, sendMail, verifySmtp };

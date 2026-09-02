@@ -27,11 +27,10 @@ test("quote ready template is wide on desktop and stacks on mobile", () => {
 });
 
 test("zone pricing uses the minimum as a floor, not an add-on", () => {
-  assert.deepEqual(quotePricing({ quoteZone: "Zone 3", baseServiceQuote: 200 }), {
-    zoneNumber: 3,
-    zoneMinimum: 260,
-    basePrice: 200,
-    finalPrice: 260
-  });
+  const zoneThree = quotePricing({ quoteZone: "Zone 3", baseServiceQuote: 200 });
+  assert.equal(zoneThree.zoneNumber, 3);
+  assert.equal(zoneThree.zoneMinimum, 260);
+  assert.equal(zoneThree.basePrice, 200);
+  assert.equal(zoneThree.finalPrice, 260);
   assert.equal(quotePricing({ quoteZone: "Zone 4", baseServiceQuote: 345 }).finalPrice, 345);
 });
