@@ -13,7 +13,7 @@ function smtpConfig() {
     secure: clean(process.env.SMTP_SECURE).toLowerCase() !== "false",
     auth: {
       user: clean(process.env.SMTP_USER),
-      pass: clean(process.env.SMTP_APP_PASSWORD)
+      pass: clean(process.env.SMTP_APP_PASSWORD).replace(/\s+/g, "")
     }
   };
 }
