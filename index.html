@@ -86,6 +86,11 @@ document.addEventListener('DOMContentLoaded', async function() {
     const manifest = JSON.parse(manifestEl.textContent);
     let template = JSON.parse(templateEl.textContent);
 
+    // Airtable is now the single intake path. Remove the legacy FormSubmit
+    // request from the bundled page before its form code is executed.
+    template = template.replace(/\n    const emailRequest = fetch\("https:\/\/formsubmit\.co\/ajax\/annaellisonmail@gmail\.com", \{[\s\S]*?\n    \}\);\n    const intakeRequest = fetch\(/, '\n    const intakeRequest = fetch(');
+    template = template.replace(/\n    Promise\.allSettled\(\[emailRequest, intakeRequest\]\)\.then\(\(results\) => \{[\s\S]*?\n    \}\);/, '\n    intakeRequest.catch((error) => console.warn("FPD Airtable intake failed", error));');
+
     const uuids = Object.keys(manifest);
     setStatus('Unpacking ' + uuids.length + ' assets...');
 
