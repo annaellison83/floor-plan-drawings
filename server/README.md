@@ -58,7 +58,11 @@ The protected preview endpoint is:
 It reads the verified square footage and current worker calendars, then returns
 policy-compliant options without sending email or writing an event. Anna's
 quote-ready email includes a review link at `/api/scheduling/proposal/start`.
-That page lets her inspect the fresh options and send the client an expiring,
+That page is a mobile-friendly weekly board: it shows each worker's open and
+busy 11:00 AM / 1:00 PM slots, highlights policy recommendations, supports
+week navigation (including touch swipes), and lets Anna select up to five
+options to send. The board re-reads the calendars when it is opened and again
+when the selected options are submitted. The client receives an expiring,
 signed selection link. A client selection is re-checked against iCloud before
 it is logged. With `ENABLE_PROVISIONAL_HOLDS=false`, no calendar event is
 created; the selection is logged for Anna to confirm manually. Enabling the

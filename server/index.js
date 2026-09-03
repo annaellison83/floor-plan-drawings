@@ -7,7 +7,7 @@ const {
   releaseProvisionalHold
 } = require("./icloud");
 const { buildRoster } = require("./calendar-roster");
-const { appointmentDurationMinutes, schedulingPolicy } = require("./scheduling-policy");
+const { appointmentDurationMinutes, deliveryTargetForWeekday, schedulingPolicy } = require("./scheduling-policy");
 const { planAppointments } = require("./appointment-planner");
 const { proposalPayload, signProposal, verifyProposal } = require("./appointment-proposals");
 const { isSmtpConfigured, sendMail, verifySmtp } = require("./mail");
@@ -187,7 +187,12 @@ async function readJsonBody(req) {
   }
   if (!body.trim()) return {};
   if (String(req.headers["content-type"] || "").includes("application/x-www-form-urlencoded")) {
-    return Object.fromEntries(new URLSearchParams(body));
+    const params = new URLSearchParams(body);
+    return [...params.entries()].reduce((result, [key, value]) => {
+      if (!(key in result)) result[key] = value;
+      else result[key] = Array.isArray(result[key]) ? [...result[key], value] : [result[key], value];
+      return result;
+    }, {});
   }
   try {
     return JSON.parse(body);
@@ -234,6 +239,57 @@ function formatProposalSlot(slot) {
   return `${dateLabel} at ${timeLabel} · ${clean(slot.worker)} · ${Number(slot.durationMinutes) || 0} minutes`;
 }
 
+function canonicalWorkerName(value) {
+  return clean(value).toLowerCase() === "ricardo" ? "ricky" : clean(value).toLowerCase();
+}
+
+function isoDate(value) {
+  const parsed = new Date(`${clean(value)}T12:00:00Z`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 10);
+}
+
+function shiftDate(dateValue, days) {
+  const parsed = new Date(`${clean(dateValue)}T12:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) return null;
+  parsed.setUTCDate(parsed.getUTCDate() + Number(days || 0));
+  return parsed.toISOString().slice(0, 10);
+}
+
+function weekStartDate(value = localDate()) {
+  const date = new Date(`${isoDate(value) || localDate()}T12:00:00Z`);
+  const day = date.getUTCDay();
+  date.setUTCDate(date.getUTCDate() + (day === 0 ? -6 : 1 - day));
+  return date.toISOString().slice(0, 10);
+}
+
+function formatWeekRange(startDate) {
+  const start = new Date(`${startDate}T12:00:00Z`);
+  const end = new Date(`${shiftDate(startDate, 6)}T12:00:00Z`);
+  const format = (date) => date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  return `${format(start)} – ${format(end)}`;
+}
+
+function slotSelectionToken(slot) {
+  return Buffer.from(JSON.stringify({
+    worker: canonicalWorkerName(slot.worker || slot.calendarName),
+    calendarName: clean(slot.calendarName),
+    date: clean(slot.date),
+    start: clean(slot.start),
+    end: clean(slot.end),
+    durationMinutes: Number(slot.durationMinutes) || null
+  })).toString("base64url");
+}
+
+function parseSlotSelection(value) {
+  try {
+    const parsed = JSON.parse(Buffer.from(String(value || ""), "base64url").toString("utf8"));
+    if (!parsed || !parsed.start || !parsed.end || !parsed.date) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
 async function buildAppointmentProposal(recordId, input = {}) {
   const job = await getJob(recordId);
   const squareFeet = Number(job.verifiedSqFt);
@@ -263,7 +319,66 @@ async function buildAppointmentProposal(recordId, input = {}) {
     service: job.service,
     slots: plan.recommendations
   });
-  return { job, plan, payload };
+  return { job, availability, plan, payload };
+}
+
+function appointmentReviewUrl(recordId, token, startDate) {
+  const base = clean(process.env.PROPOSAL_REVIEW_BASE_URL) || "https://floor-plan-drawings.onrender.com/api/scheduling/proposal/start";
+  const url = new URL(base);
+  url.searchParams.set("recordId", recordId);
+  url.searchParams.set("token", token);
+  url.searchParams.set("startDate", startDate);
+  return url.href;
+}
+
+function boardSlotTime(slot) {
+  const match = clean(slot.localStart).match(/(?:T|\s)(\d{1,2}:\d{2})$/);
+  const value = match ? match[1] : clean(slot.localStart);
+  const [hour, minute] = value.split(":").map(Number);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return value;
+  return `${hour % 12 || 12}:${String(minute).padStart(2, "0")} ${hour >= 12 ? "PM" : "AM"}`;
+}
+
+async function buildAppointmentBoard(recordId, input = {}) {
+  const startDate = weekStartDate(input.startDate || localDate());
+  const built = await buildAppointmentProposal(recordId, { ...input, startDate, days: 7, count: 5 });
+  const recommended = new Set(built.plan.recommendations.map((slot) => `${canonicalWorkerName(slot.worker)}|${slot.start}|${slot.end}`));
+  return { ...built, startDate, recommended };
+}
+
+function appointmentBoardPage({ job, availability, startDate, plan, recommended }, recordId, token, notice = "") {
+  const dates = Array.from({ length: 7 }, (_, index) => shiftDate(startDate, index));
+  const workers = (availability.calendars || []).map((calendar) => ({
+    ...calendar,
+    worker: canonicalWorkerName(calendar.name),
+    label: canonicalWorkerName(calendar.name).replace(/^./, (letter) => letter.toUpperCase())
+  }));
+  const dayHeader = dates.map((date) => {
+    const day = new Date(`${date}T12:00:00Z`);
+    const weekend = [0, 6].includes(day.getUTCDay());
+    return `<div class="day-header${weekend ? " weekend" : ""}"><strong>${day.toLocaleDateString("en-US", { weekday: "short" })}</strong><span>${day.toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span></div>`;
+  }).join("");
+  const workerRows = workers.map((calendar) => {
+    const cells = dates.map((date) => {
+      const day = new Date(`${date}T12:00:00Z`).getUTCDay();
+      const slots = (calendar.slots || []).filter((slot) => slot.date === date);
+      if ([0, 6].includes(day)) return `<div class="day-cell closed"><span>Office closed</span></div>`;
+      const content = slots.map((slot) => {
+        if (!slot.available) return `<span class="slot busy"><span>${escapeHtml(boardSlotTime(slot))}</span><small>Busy</small></span>`;
+        const key = `${calendar.worker}|${slot.start}|${slot.end}`;
+        const isRecommended = recommended.has(key);
+        const selection = slotSelectionToken({ ...slot, worker: calendar.worker, calendarName: calendar.name, durationMinutes: availability.durationMinutes });
+        return `<label class="slot open${isRecommended ? " recommended" : ""}"><input type="checkbox" name="slot" value="${escapeHtml(selection)}"><span>${escapeHtml(boardSlotTime(slot))}</span>${isRecommended ? "<small>Recommended</small>" : "<small>Open</small>"}</label>`;
+      }).join("");
+      return `<div class="day-cell">${content || "<span class=\"slot busy\"><small>No slot</small></span>"}</div>`;
+    }).join("");
+    return `<div class="worker-row"><div class="worker-name"><strong>${escapeHtml(calendar.label)}</strong><small>${calendar.worker === "sarah" ? "Nearby spillover" : calendar.worker === "corrie" ? "Primary coverage" : "Secondary coverage"}</small></div>${cells}</div>`;
+  }).join("");
+  const noticeHtml = notice ? `<div class="notice" role="status">${escapeHtml(notice)}</div>` : "";
+  const prevUrl = appointmentReviewUrl(recordId, token, shiftDate(startDate, -7));
+  const nextUrl = appointmentReviewUrl(recordId, token, shiftDate(startDate, 7));
+  const actionUrl = appointmentReviewUrl(recordId, token, startDate);
+  return `<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Appointment availability | FloorPlanDrawings</title><style>body{margin:0;background:#f3f1eb;color:#22332e;font-family:Arial,Helvetica,sans-serif}.shell{max-width:1180px;margin:22px auto;padding:0 16px}.card{background:#fbf8f1;border:1px solid #ddd7ca;border-radius:20px;padding:34px}.eyebrow{color:#53635c;font-size:12px;line-height:17px;font-weight:700;letter-spacing:.15em;text-transform:uppercase}.title{margin:10px 0 8px;color:#173f36;font-size:32px;line-height:40px}.copy{color:#53635c;font-size:16px;line-height:25px}.property{margin:18px 0;padding:18px 20px;background:#b8c9ae;border-radius:14px;font-size:18px;font-weight:700}.toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:24px 0 12px}.toolbar a{color:#0b57d0;font-weight:700;text-decoration:none}.week-label{color:#173f36;font-size:20px;font-weight:700}.board-wrap{overflow-x:auto;border:1px solid #d9d5ca;border-radius:14px;background:#fff}.board{min-width:920px}.week-header,.worker-row{display:grid;grid-template-columns:150px repeat(7,minmax(110px,1fr))}.week-header{border-bottom:1px solid #d9d5ca;background:#e3eadf}.day-header{padding:12px 10px;color:#394842;font-size:13px;text-transform:uppercase;letter-spacing:.08em}.day-header span{display:block;margin-top:4px;font-size:14px;text-transform:none;letter-spacing:0}.day-header.weekend{color:#8a897c}.worker-row{min-height:126px;border-bottom:1px solid #e4e0d6}.worker-row:last-child{border-bottom:0}.worker-name{padding:16px 12px;background:#fbf8f1;border-right:1px solid #e4e0d6}.worker-name strong{display:block;color:#173f36;font-size:16px}.worker-name small,.slot small{display:block;margin-top:5px;color:#6b7067;font-size:12px;line-height:16px}.day-cell{display:flex;flex-direction:column;gap:7px;padding:10px;border-right:1px solid #e4e0d6}.day-cell:last-child{border-right:0}.day-cell.closed{justify-content:center;color:#9a988c;font-size:12px}.slot{display:block;position:relative;border-radius:10px;padding:10px 9px;font-size:14px;line-height:18px}.slot.open{background:#e3eadf;border:1px solid #b8c9ae;cursor:pointer}.slot.open.recommended{box-shadow:inset 0 0 0 2px #6c8f78}.slot.open input{margin:0 6px 0 0;accent-color:#173f36}.slot.busy{background:#f3f1eb;color:#9a988c;border:1px solid #e4e0d6}.slot.busy small{color:#9a988c}.legend{display:flex;flex-wrap:wrap;gap:14px;margin:16px 0;color:#53635c;font-size:13px}.legend span:before{content:"";display:inline-block;width:11px;height:11px;margin-right:5px;border-radius:3px;background:#e3eadf;vertical-align:-1px}.legend .busy:before{background:#f3f1eb;border:1px solid #e4e0d6}.legend .recommended:before{background:#b8c9ae}.actions{display:flex;align-items:center;justify-content:space-between;gap:15px;margin-top:22px}.button{border:0;border-radius:10px;background:#173f36;color:#fff;padding:15px 22px;font-size:16px;font-weight:700;cursor:pointer}.fine{color:#6b7067;font-size:13px;line-height:20px}.notice{margin:0 0 18px;padding:14px 16px;background:#e4f1de;border:1px solid #9fbc91;border-radius:10px;color:#1f3a34;font-weight:700}@media(max-width:700px){.shell{margin:8px auto;padding:0 8px}.card{padding:22px 14px;border-radius:14px}.title{font-size:27px;line-height:34px}.toolbar{margin-top:18px}.week-label{font-size:17px}.board-wrap{margin:0 -2px}.actions{align-items:stretch;flex-direction:column}.button{width:100%}}</style></head><body><main class="shell" data-prev="${escapeHtml(prevUrl)}" data-next="${escapeHtml(nextUrl)}"><section class="card"><div class="eyebrow">FloorPlanDrawings / scheduling</div><h1 class="title">Offer appointment times</h1>${noticeHtml}<p class="copy">${escapeHtml(job.clientName || "Client")} · ${escapeHtml(job.propertyAddress)}</p><div class="property">${escapeHtml(job.propertyAddress)}</div><p class="copy">Select the open times you want to offer. Recommended slots are outlined. This step only prepares an email—no calendar event is created.</p><div class="toolbar"><a href="${escapeHtml(prevUrl)}">‹ Previous week</a><div class="week-label">${escapeHtml(formatWeekRange(startDate))}</div><a href="${escapeHtml(nextUrl)}">Next week ›</a></div><form method="post" action="${escapeHtml(actionUrl)}"><input type="hidden" name="startDate" value="${escapeHtml(startDate)}"><div class="board-wrap"><div class="board"><div class="week-header"><div class="day-header">Employee</div>${dayHeader}</div>${workerRows}</div></div><div class="legend"><span>Open</span><span class="recommended">Recommended</span><span class="busy">Busy / unavailable</span></div><div class="actions"><span class="fine">Choose up to five options. Swipe left/right on mobile to change weeks.</span><button class="button" type="submit">Send selected options to client</button></div></form></section></main><script>(function(){const main=document.querySelector('main');let startX=0;main.addEventListener('touchstart',e=>{startX=e.changedTouches[0].clientX},{passive:true});main.addEventListener('touchend',e=>{const delta=e.changedTouches[0].clientX-startX;if(Math.abs(delta)>60)location.href=delta<0?main.dataset.next:main.dataset.prev},{passive:true});document.querySelector('form').addEventListener('change',()=>{const checked=[...document.querySelectorAll('input[name="slot"]:checked')];if(checked.length>5){checked[checked.length-1].checked=false;alert('Choose up to five appointment options.')}})})();</script></body></html>`;
 }
 
 function proposalPage(payload, token, notice = "", actionUrl = appointmentProposalBaseUrl(), submitLabel = "Request this time") {
@@ -273,20 +388,43 @@ function proposalPage(payload, token, notice = "", actionUrl = appointmentPropos
 }
 
 async function sendAvailabilityProposal(recordId, input = {}) {
-  const { job, plan, payload } = await buildAppointmentProposal(recordId, input);
+  const { job, availability, plan, payload } = await buildAppointmentProposal(recordId, input);
   if (!job.clientEmail) throw new Error("Client Email is missing");
-  const token = signProposal(payload);
-  const proposalUrl = `${appointmentProposalBaseUrl()}?token=${encodeURIComponent(token)}`;
-  const email = clientAvailabilityProposalEmail(job, proposalUrl, payload.slots);
+  let proposalSlots = plan.recommendations;
+  if (Array.isArray(input.selectedSlots) && input.selectedSlots.length) {
+    if (input.selectedSlots.length > 5) throw new Error("Choose up to five appointment options");
+    const selected = input.selectedSlots.map((requested) => {
+      const worker = canonicalWorkerName(requested.worker || requested.calendarName);
+      const calendar = (availability.calendars || []).find((item) => canonicalWorkerName(item.name) === worker);
+      const current = calendar && (calendar.slots || []).find((slot) => slot.available && slot.start === requested.start && slot.end === requested.end);
+      if (!current) throw new Error("One or more selected times is no longer available. Refresh the week and try again.");
+      const weekday = new Date(`${current.date}T12:00:00Z`).getUTCDay();
+      return {
+        ...current,
+        worker,
+        calendarName: calendar.name,
+        durationMinutes: availability.durationMinutes,
+        deliveryTarget: deliveryTargetForWeekday(weekday),
+        rationale: "Selected by Anna from the live availability board"
+      };
+    });
+    const unique = new Set(selected.map((slot) => `${slot.worker}|${slot.start}|${slot.end}`));
+    if (unique.size !== selected.length) throw new Error("Each appointment option must be unique");
+    proposalSlots = selected;
+  }
+  const selectedPayload = { ...payload, slots: proposalSlots };
+  const proposalToken = signProposal(selectedPayload);
+  const proposalUrl = `${appointmentProposalBaseUrl()}?token=${encodeURIComponent(proposalToken)}`;
+  const email = clientAvailabilityProposalEmail(job, proposalUrl, proposalSlots);
   const prior = await findAppointmentProposalDeliveries(recordId);
   if (prior.length) return { ok: false, status: 409, error: "Appointment proposal already sent", recordId, priorDeliveryRecordIds: prior.map((item) => item.id) };
-  const reservation = await createAppointmentProposalLog({ recordId, subject: email.subject, status: "Pending", summary: `Reserved by Render for ${payload.slots.length} appointment options` });
+  const reservation = await createAppointmentProposalLog({ recordId, subject: email.subject, status: "Pending", summary: `Reserved by Render for ${proposalSlots.length} appointment options` });
   const logRecordId = reservation.records && reservation.records[0] && reservation.records[0].id;
   if (!logRecordId) throw new Error("Airtable did not return the appointment proposal log ID");
   try {
     const delivery = await sendMail({ to: job.clientEmail, replyTo: clean(process.env.SMTP_USER), subject: email.subject, html: email.html, text: email.text });
     await updateCommunicationLog(logRecordId, { "Delivery Status": "Sent", Summary: `Appointment options sent by Render for ${job.propertyAddress}${delivery.messageId ? `; message ${delivery.messageId}` : ""}` });
-    return { ok: true, status: 200, recordId, logRecordId, proposalUrl, options: plan.recommendations };
+    return { ok: true, status: 200, recordId, logRecordId, proposalUrl, options: proposalSlots };
   } catch (error) {
     await updateCommunicationLog(logRecordId, { "Delivery Status": "Failed", Summary: `Appointment proposal delivery failed: ${error.message}` }).catch(() => {});
     throw error;
@@ -744,14 +882,20 @@ async function route(req, res) {
     try {
       await authorizeProposalStart(recordId, providedToken);
       if (req.method === "GET") {
-        const built = await buildAppointmentProposal(recordId);
-        const proposalToken = signProposal(built.payload);
-        const actionUrl = `${appointmentProposalBaseUrl()}/start?recordId=${encodeURIComponent(recordId)}&token=${encodeURIComponent(providedToken)}`;
-        return html(res, 200, proposalPage(built.payload, proposalToken, "", actionUrl, "Send these options to the client"));
+        const built = await buildAppointmentBoard(recordId, { startDate: clean(url.searchParams.get("startDate")) || localDate() });
+        return html(res, 200, appointmentBoardPage(built, recordId, providedToken));
       }
       if (!appointmentProposalEnabled()) return html(res, 503, proposalPage({ address: "this quote", slots: [] }, "", "Appointment proposals are not enabled yet. No email or calendar event was created."));
-      const result = await sendAvailabilityProposal(recordId);
-      return html(res, 200, `<!doctype html><html><body style="margin:0;background:#F5F1E8;color:#22261F;font-family:Helvetica,Arial,sans-serif;"><main style="max-width:620px;margin:10vh auto;padding:36px 28px;background:#fff;border:1px solid #DCD7C9;border-radius:14px;"><h1>Appointment options sent</h1><p>The available times were emailed to the client. No calendar event was created.</p></main></body></html>`);
+      const body = await readJsonBody(req);
+      const selectedValues = Array.isArray(body.slot) ? body.slot : body.slot ? [body.slot] : [];
+      const selectedSlots = selectedValues.map(parseSlotSelection);
+      if (!selectedSlots.length || selectedSlots.some((slot) => !slot)) {
+        const built = await buildAppointmentBoard(recordId, { startDate: clean(body.startDate) || localDate() });
+        return html(res, 400, appointmentBoardPage(built, recordId, providedToken, "Select at least one open appointment option first."));
+      }
+      const result = await sendAvailabilityProposal(recordId, { startDate: clean(body.startDate) || localDate(), days: 7, selectedSlots });
+      const options = result.options.map((slot) => `<li>${escapeHtml(formatProposalSlot(slot))}</li>`).join("");
+      return html(res, 200, `<!doctype html><html><body style="margin:0;background:#F5F1E8;color:#22261F;font-family:Helvetica,Arial,sans-serif;"><main style="max-width:620px;margin:10vh auto;padding:36px 28px;background:#fff;border:1px solid #DCD7C9;border-radius:14px;"><div style="font-size:11px;font-weight:bold;letter-spacing:2px;text-transform:uppercase;color:#6B6B5F;">FloorPlanDrawings / scheduling</div><h1 style="color:#173F36;">Appointment options sent</h1><p>The selected options were emailed to the client. No calendar event was created.</p><ul>${options}</ul><p><a href="${escapeHtml(appointmentReviewUrl(recordId, providedToken, weekStartDate(localDate())))}">Return to availability</a></p></main></body></html>`);
     } catch (error) {
       return html(res, 409, proposalPage({ address: "this quote", slots: [] }, "", error.message));
     }
