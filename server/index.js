@@ -323,6 +323,11 @@ async function buildAppointmentProposal(recordId, input = {}) {
 }
 
 function appointmentReviewUrl(recordId, token, startDate) {
+  if (recordId === "test-board") {
+    const testUrl = new URL("https://floor-plan-drawings.onrender.com/api/email/test-scheduling-board");
+    testUrl.searchParams.set("startDate", startDate);
+    return testUrl.href;
+  }
   const base = clean(process.env.PROPOSAL_REVIEW_BASE_URL) || "https://floor-plan-drawings.onrender.com/api/scheduling/proposal/start";
   const url = new URL(base);
   url.searchParams.set("recordId", recordId);
@@ -344,6 +349,33 @@ async function buildAppointmentBoard(recordId, input = {}) {
   const built = await buildAppointmentProposal(recordId, { ...input, startDate, days: 7, count: 5 });
   const recommended = new Set(built.plan.recommendations.map((slot) => `${canonicalWorkerName(slot.worker)}|${slot.start}|${slot.end}`));
   return { ...built, startDate, recommended };
+}
+
+function testAppointmentBoard(startDate) {
+  const dates = Array.from({ length: 7 }, (_, index) => shiftDate(startDate, index));
+  const calendars = ["corrie", "ricardo", "sarah"].map((name, workerIndex) => ({
+    name,
+    url: "https://example.com/test-calendar",
+    busy: [],
+    slots: dates.flatMap((date, dayIndex) => {
+      const weekday = new Date(`${date}T12:00:00Z`).getUTCDay();
+      if ([0, 6].includes(weekday)) return [];
+      return ["11:00", "13:00"].map((time, timeIndex) => {
+        const start = new Date(`${date}T${time}:00-07:00`);
+        const end = new Date(start.getTime() + 90 * 60000);
+        const busy = (workerIndex + dayIndex + timeIndex) % 5 === 0;
+        return { date, start: start.toISOString(), end: end.toISOString(), localStart: `${date} ${time}`, available: !busy, conflicts: busy ? ["Busy (test data)"] : [] };
+      });
+    })
+  }));
+  const available = calendars.flatMap((calendar) => calendar.slots.filter((slot) => slot.available).slice(0, 1).map((slot) => ({ ...slot, worker: canonicalWorkerName(calendar.name), calendarName: calendar.name })));
+  return {
+    job: testSchedulingPreviewJob(),
+    availability: { readOnly: true, dryRun: true, startDate, days: 7, durationMinutes: 90, calendars },
+    startDate,
+    plan: { recommendations: available },
+    recommended: new Set(available.map((slot) => `${slot.worker}|${slot.start}|${slot.end}`))
+  };
 }
 
 function appointmentBoardPage({ job, availability, startDate, plan, recommended }, recordId, token, notice = "") {
@@ -867,6 +899,17 @@ async function route(req, res) {
     return html(res, 200, email.html.replace("</body>", "<p style=\"max-width:680px;margin:0 auto 24px;padding:0 16px;color:#6b7067;font:13px/20px Arial,sans-serif;text-align:center;\">TEST ONLY — no appointment was requested or recorded.</p></body>"));
   }
 
+  if ((req.method === "GET" || req.method === "POST") && url.pathname === "/api/email/test-scheduling-board") {
+    const startDate = weekStartDate(url.searchParams.get("startDate") || localDate());
+    if (req.method === "POST") {
+      const body = await readJsonBody(req);
+      const selected = Array.isArray(body.slot) ? body.slot : body.slot ? [body.slot] : [];
+      if (!selected.length) return html(res, 400, appointmentBoardPage(testAppointmentBoard(startDate), "test-board", "test", "Select at least one open appointment option first."));
+      return html(res, 200, `<!doctype html><html><body style="margin:0;background:#F5F1E8;color:#22261F;font-family:Helvetica,Arial,sans-serif;"><main style="max-width:620px;margin:10vh auto;padding:36px 28px;background:#fff;border:1px solid #DCD7C9;border-radius:14px;"><div style="font-size:11px;font-weight:bold;letter-spacing:2px;text-transform:uppercase;color:#6B6B5F;">FloorPlanDrawings / scheduling</div><h1 style="color:#173F36;">Test selection received</h1><p>No email was sent, no Airtable record changed, and no calendar event was created.</p><p><a href="${escapeHtml(appointmentReviewUrl("test-board", "test", startDate))}">Return to test board</a></p></main></body></html>`);
+    }
+    return html(res, 200, appointmentBoardPage(testAppointmentBoard(startDate), "test-board", "test"));
+  }
+
   if (req.method === "GET" && url.pathname === "/healthz") {
     return json(res, 200, {
       service: SERVICE_NAME,
@@ -1254,6 +1297,25 @@ async function route(req, res) {
       return json(res, 200, { ok: true, test: true, workflow: "APPOINTMENT OPTIONS", recipient, propertyAddress: sampleJob.propertyAddress, options: slots.length, ...delivery });
     } catch (error) {
       return json(res, 502, { error: "Scheduling test email delivery failed", detail: error.message });
+    }
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/email/test-quote-with-scheduling") {
+    if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+    const recipient = TEST_EMAIL_RECIPIENT;
+    try {
+      const sampleJob = await buildTestQuote();
+      const reviewUrl = appointmentReviewUrl("test-board", "test", weekStartDate(localDate()));
+      const sample = quoteReadyEmail({ ...sampleJob, availabilityReviewUrl: reviewUrl });
+      const delivery = await sendMail({
+        to: recipient,
+        subject: `[TEST — NO WORKFLOW] ${sample.subject}`,
+        html: sample.html,
+        text: sample.text
+      });
+      return json(res, 200, { ok: true, test: true, workflow: "QUOTE READY + SCHEDULING BOARD", recipient, propertyAddress: sampleJob.propertyAddress, reviewUrl, ...delivery });
+    } catch (error) {
+      return json(res, 502, { error: "Quote scheduling test email delivery failed", detail: error.message });
     }
   }
 
