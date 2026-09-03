@@ -6,7 +6,7 @@ Updated: 2026-09-03
 
 - Repository: `annaellison83/floor-plan-drawings`
 - Branch: `main`
-- Latest synced commit: `630f8a9` (`add appointment availability proposal flow`)
+- Latest synced commit: `df9653d` (`polish appointment option times`)
 - Netlify website and functions remain live. Airtable remains the dashboard/source of truth. Render now sends the migrated QUOTE READY and approved-client quote emails.
 - Render service: `floorplan-drawings-backend` at `https://floor-plan-drawings.onrender.com`
 - Render settings: `npm install --prefix server`; `node server/index.js`; health path `/healthz`; Starter plan; auto-deploy from `main` enabled.
