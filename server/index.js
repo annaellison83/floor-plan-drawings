@@ -10,7 +10,7 @@ const { buildRoster } = require("./calendar-roster");
 const { appointmentDurationMinutes, deliveryTargetForWeekday, schedulingPolicy } = require("./scheduling-policy");
 const { planAppointments } = require("./appointment-planner");
 const { proposalPayload, signProposal, verifyProposal } = require("./appointment-proposals");
-const { isSmtpConfigured, sendFailureAlert, sendMail, verifySmtp } = require("./mail");
+const { hasFallbackSmtp, isSmtpConfigured, sendFailureAlert, sendMail, verifySmtp } = require("./mail");
 const {
   clientQuoteEmail,
   clientAvailabilityProposalEmail,
@@ -111,7 +111,7 @@ function integrationStatus() {
     appointmentProposalSendEnabled: appointmentProposalEnabled(),
     clientQuoteSchedulingEnabled: clientQuoteSchedulingEnabled(),
     deliveryAlertsEnabled: Boolean(clean(process.env.DELIVERY_ALERT_EMAIL)),
-    smtpFallbackConfigured: Boolean(clean(process.env.FALLBACK_SMTP_HOST) && clean(process.env.FALLBACK_SMTP_USER) && clean(process.env.FALLBACK_SMTP_APP_PASSWORD)),
+    smtpFallbackConfigured: hasFallbackSmtp(),
     appointmentProposalHoldEnabled: provisionalHoldEnabled()
   };
 }

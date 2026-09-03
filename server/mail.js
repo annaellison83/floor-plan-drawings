@@ -32,11 +32,24 @@ function smtpConfigs() {
   const primaryPrefix = clean(process.env.ICLOUD_SMTP_HOST) ? "ICLOUD_SMTP_" : "SMTP_";
   const primary = smtpConfig(primaryPrefix);
   const fallback = smtpConfig("FALLBACK_SMTP_");
-  return [primary, configured(fallback) ? fallback : null].filter(Boolean);
+  const alternatePrefix = primaryPrefix === "ICLOUD_SMTP_" ? "SMTP_" : "ICLOUD_SMTP_";
+  const alternate = smtpConfig(alternatePrefix);
+  const candidates = [primary, fallback, alternate].filter(configured);
+  const seen = new Set();
+  return candidates.filter((config) => {
+    const key = `${config.host}|${config.port}|${config.auth.user}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function isSmtpConfigured() {
   return configured(smtpConfig());
+}
+
+function hasFallbackSmtp() {
+  return smtpConfigs().length > 1;
 }
 
 function createTransport(config = smtpConfig()) {
@@ -122,4 +135,4 @@ async function sendFailureAlert({ workflow, recordId, error }) {
   }
 }
 
-module.exports = { isSmtpConfigured, sendFailureAlert, sendMail, verifySmtp };
+module.exports = { hasFallbackSmtp, isSmtpConfigured, sendFailureAlert, sendMail, verifySmtp };
