@@ -134,6 +134,18 @@ async function findQuoteReadyDeliveries(recordId, options = {}) {
   return (body.records || []).map((record) => ({ id: record.id, ...record.fields }));
 }
 
+async function listQuoteReadyCandidates(options = {}) {
+  const settings = { ...config(), ...options };
+  if (!settings.token || !settings.baseId) throw new Error("Airtable is not configured");
+  const formula = "AND({Website Workflow}='Quick Quote',{Quote Review}='Ready for Anna',{Anna Email Status}='Not Sent',{Property Research Complete}=1)";
+  const table = settings.jobsTableId || settings.jobsTable;
+  const url = new URL(`${AIRTABLE_API}/${encodeURIComponent(settings.baseId)}/${encodeURIComponent(table)}`);
+  url.searchParams.set("filterByFormula", formula);
+  url.searchParams.set("maxRecords", "10");
+  const body = await airtableJson(url.href, { token: settings.token });
+  return body.records || [];
+}
+
 async function createQuoteReadyLog(input, options = {}) {
   const settings = { ...config(), ...options };
   if (!settings.token || !settings.baseId) throw new Error("Airtable is not configured");
@@ -158,13 +170,29 @@ async function updateCommunicationLog(recordId, fields, options = {}) {
   });
 }
 
+async function updateJob(recordId, fields, options = {}) {
+  const settings = { ...config(), ...options };
+  const id = clean(recordId);
+  if (!settings.token || !settings.baseId) throw new Error("Airtable is not configured");
+  if (!id || !/^rec[a-zA-Z0-9]+$/.test(id)) throw new Error("A valid Job record ID is required");
+  const table = settings.jobsTableId || settings.jobsTable;
+  const url = `${AIRTABLE_API}/${encodeURIComponent(settings.baseId)}/${encodeURIComponent(table)}`;
+  return airtableJson(url, {
+    token: settings.token,
+    method: "PATCH",
+    body: { records: [{ id, fields }] }
+  });
+}
+
 module.exports = {
   communicationKey,
   config,
   createQuoteReadyLog,
   findQuoteReadyDeliveries,
   getJob,
+  listQuoteReadyCandidates,
   mapJob,
   quoteReadyLogFields,
-  updateCommunicationLog
+  updateCommunicationLog,
+  updateJob
 };

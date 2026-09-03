@@ -7,7 +7,9 @@ const {
   createQuoteReadyLog,
   findQuoteReadyDeliveries,
   getJob,
-  updateCommunicationLog
+  listQuoteReadyCandidates,
+  updateCommunicationLog,
+  updateJob
 } = require("./airtable");
 
 const PORT = Number(process.env.PORT) || 10000;
@@ -22,6 +24,7 @@ const TEST_PROPERTY_ADDRESSES = [
   "2750 Medlow Ave, Los Angeles, CA 90065"
 ];
 const quoteReadyLocks = new Set();
+let quoteReadyPollRunning = false;
 
 function clean(value) {
   return value === undefined || value === null ? "" : String(value).trim();
@@ -62,6 +65,69 @@ function integrationStatus() {
     postgres: Boolean(process.env.DATABASE_URL),
     quoteReadySendEnabled: clean(process.env.ENABLE_QUOTE_READY_SENDS).toLowerCase() === "true"
   };
+}
+
+function quoteReadyEnabled() {
+  return clean(process.env.ENABLE_QUOTE_READY_SENDS).toLowerCase() === "true";
+}
+
+async function deliverQuoteReady(recordId) {
+  if (quoteReadyLocks.has(recordId)) return { ok: false, status: 409, error: "Delivery already in progress" };
+  quoteReadyLocks.add(recordId);
+  let logRecordId = "";
+
+  try {
+    const priorDeliveries = await findQuoteReadyDeliveries(recordId);
+    if (priorDeliveries.length) {
+      return { ok: false, status: 409, error: "Duplicate delivery blocked" };
+    }
+    const job = await getJob(recordId);
+    const email = quoteReadyEmail(job);
+    const reservation = await createQuoteReadyLog({
+      recordId,
+      subject: email.subject,
+      status: "Pending",
+      summary: "Reserved by Render before SMTP delivery"
+    });
+    logRecordId = reservation.records && reservation.records[0] && reservation.records[0].id;
+    if (!logRecordId) throw new Error("Airtable did not return the reserved Communication Log ID");
+
+    const recipient = clean(process.env.SMTP_USER);
+    if (!recipient) throw new Error("SMTP_USER is not configured");
+    const delivery = await sendMail({ to: recipient, subject: email.subject, html: email.html, text: email.text });
+    await updateCommunicationLog(logRecordId, {
+      "Delivery Status": "Sent",
+      Summary: `Delivered by Render via Gmail SMTP${delivery.messageId ? `; message ${delivery.messageId}` : ""}`
+    });
+    await updateJob(recordId, { "Anna Email Status": "Sent - Quote Ready" });
+    return { ok: true, status: 200, recordId, logRecordId, delivery: "sent" };
+  } catch (error) {
+    if (logRecordId) {
+      await updateCommunicationLog(logRecordId, {
+        "Delivery Status": "Failed",
+        Summary: `Render delivery failed: ${error.message}`
+      }).catch(() => {});
+    }
+    return { ok: false, status: 502, error: "QUOTE READY delivery failed", detail: error.message };
+  } finally {
+    quoteReadyLocks.delete(recordId);
+  }
+}
+
+async function pollQuoteReady() {
+  if (!quoteReadyEnabled() || quoteReadyPollRunning) return;
+  quoteReadyPollRunning = true;
+  try {
+    const candidates = await listQuoteReadyCandidates();
+    for (const candidate of candidates) {
+      const result = await deliverQuoteReady(candidate.id);
+      console.log(`QUOTE READY poll ${candidate.id}: ${result.ok ? "sent" : result.error}`);
+    }
+  } catch (error) {
+    console.error(`QUOTE READY poll failed: ${error.message}`);
+  } finally {
+    quoteReadyPollRunning = false;
+  }
 }
 
 async function buildTestQuote() {
@@ -245,54 +311,12 @@ async function route(req, res) {
 
   if (req.method === "POST" && url.pathname === "/api/airtable/send-quote-ready") {
     if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
-    if (clean(process.env.ENABLE_QUOTE_READY_SENDS).toLowerCase() !== "true") {
+    if (!quoteReadyEnabled()) {
       return json(res, 503, { error: "QUOTE READY sending is disabled" });
     }
-
     const recordId = clean(url.searchParams.get("recordId"));
-    if (quoteReadyLocks.has(recordId)) return json(res, 409, { error: "QUOTE READY delivery is already in progress" });
-    quoteReadyLocks.add(recordId);
-    let logRecordId = "";
-
-    try {
-      const priorDeliveries = await findQuoteReadyDeliveries(recordId);
-      if (priorDeliveries.length) {
-        return json(res, 409, {
-          error: "Duplicate delivery blocked",
-          priorDeliveryRecordIds: priorDeliveries.map((delivery) => delivery.id)
-        });
-      }
-
-      const job = await getJob(recordId);
-      const email = quoteReadyEmail(job);
-      const reservation = await createQuoteReadyLog({
-        recordId,
-        subject: email.subject,
-        status: "Pending",
-        summary: "Reserved by Render before SMTP delivery"
-      });
-      logRecordId = reservation.records && reservation.records[0] && reservation.records[0].id;
-      if (!logRecordId) throw new Error("Airtable did not return the reserved Communication Log ID");
-
-      const recipient = clean(process.env.SMTP_USER);
-      if (!recipient) throw new Error("SMTP_USER is not configured");
-      const delivery = await sendMail({ to: recipient, subject: email.subject, html: email.html, text: email.text });
-      await updateCommunicationLog(logRecordId, {
-        "Delivery Status": "Sent",
-        Summary: `Delivered by Render via Gmail SMTP${delivery.messageId ? `; message ${delivery.messageId}` : ""}`
-      });
-      return json(res, 200, { ok: true, recordId, logRecordId, delivery: "sent" });
-    } catch (error) {
-      if (logRecordId) {
-        await updateCommunicationLog(logRecordId, {
-          "Delivery Status": "Failed",
-          Summary: `Render delivery failed: ${error.message}`
-        }).catch(() => {});
-      }
-      return json(res, 502, { error: "QUOTE READY delivery failed", detail: error.message });
-    } finally {
-      quoteReadyLocks.delete(recordId);
-    }
+    const result = await deliverQuoteReady(recordId);
+    return json(res, result.status, result);
   }
 
   return json(res, 404, { error: "Not found" });
@@ -306,4 +330,6 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`${SERVICE_NAME} listening on ${PORT}`);
+  setTimeout(pollQuoteReady, 5000).unref();
+  setInterval(pollQuoteReady, Number(process.env.QUOTE_READY_POLL_MS) || 60000).unref();
 });
