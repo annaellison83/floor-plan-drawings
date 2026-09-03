@@ -1,6 +1,7 @@
 const http = require("node:http");
 const { discoverCalendars } = require("./icloud");
 const { buildRoster } = require("./calendar-roster");
+const { schedulingPolicy } = require("./scheduling-policy");
 const { isSmtpConfigured, sendMail, verifySmtp } = require("./mail");
 const { clientQuoteEmail, quoteReadyEmail } = require("./email-templates");
 const {
@@ -328,6 +329,11 @@ async function route(req, res) {
         detail: error.message
       });
     }
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/icloud/scheduling-policy") {
+    if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+    return json(res, 200, { readOnly: true, ...schedulingPolicy() });
   }
 
   if (req.method === "GET" && url.pathname === "/api/email/verify") {
