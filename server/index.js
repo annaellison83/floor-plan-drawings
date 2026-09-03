@@ -223,7 +223,13 @@ function escapeHtml(value) {
 function formatProposalSlot(slot) {
   const date = new Date(`${clean(slot.date)}T12:00:00`);
   const dateLabel = Number.isNaN(date.getTime()) ? clean(slot.date) : date.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
-  return `${dateLabel} at ${clean(slot.localStart)} · ${clean(slot.worker)} · ${Number(slot.durationMinutes) || 0} minutes`;
+  const rawTime = clean(slot.localStart).match(/(?:T|\s)(\d{1,2}:\d{2})$/);
+  const time = rawTime ? rawTime[1] : clean(slot.localStart);
+  const [hour, minute] = time.split(":").map(Number);
+  const timeLabel = Number.isFinite(hour) && Number.isFinite(minute)
+    ? `${hour % 12 || 12}:${String(minute).padStart(2, "0")} ${hour >= 12 ? "PM" : "AM"}`
+    : time;
+  return `${dateLabel} at ${timeLabel} · ${clean(slot.worker)} · ${Number(slot.durationMinutes) || 0} minutes`;
 }
 
 async function buildAppointmentProposal(recordId, input = {}) {

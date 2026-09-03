@@ -127,8 +127,14 @@ function formatSlot(slot) {
   const dateLabel = Number.isNaN(date.getTime())
     ? text(slot.date)
     : date.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+  const rawTime = text(slot.localStart).match(/(?:T|\s)(\d{1,2}:\d{2})$/);
+  const time = rawTime ? rawTime[1] : text(slot.localStart);
+  const [hour, minute] = time.split(":").map(Number);
+  const timeLabel = Number.isFinite(hour) && Number.isFinite(minute)
+    ? `${hour % 12 || 12}:${String(minute).padStart(2, "0")} ${hour >= 12 ? "PM" : "AM"}`
+    : time;
   const duration = slot.durationMinutes ? `${slot.durationMinutes} minutes` : "scheduled visit";
-  return `${dateLabel} at ${text(slot.localStart)} · ${text(slot.worker)} · ${duration}`;
+  return `${dateLabel} at ${timeLabel} · ${text(slot.worker)} · ${duration}`;
 }
 
 function clientAvailabilityProposalEmail(job, proposalUrl, slots = []) {
