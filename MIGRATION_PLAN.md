@@ -21,6 +21,8 @@ disabled as part of the preparatory work.
 8. The dry-run planner is live at
    `/api/icloud/appointments/dry-run`; it recommends a worker/slot without
    creating events or changing Airtable.
+9. Provisional hold create/release endpoints are implemented but remain
+   disabled behind `ENABLE_PROVISIONAL_HOLDS=false` pending review.
 
 ## Execution order
 
@@ -30,9 +32,9 @@ disabled as part of the preparatory work.
 2. **Dry-run appointment planner.** Combine square footage, service type,
    Sarah's 5-mile starting radius, worker capacity, and delivery targets. Every
    recommendation must include duration, worker, slot, and delivery target.
-3. **Provisional holds.** Add an idempotent, feature-flagged CalDAV create
-   endpoint with an expiration time and a unique job/slot key. Keep it disabled
-   until the dry-run output is reviewed.
+3. **Provisional holds.** Enable the staged idempotent CalDAV create endpoint
+   only after the dry-run output is reviewed. It requires an expiration time,
+   uses a unique job/slot key, and includes a protected release path.
 4. **Confirmed events.** Add the confirmation path, duplicate protection, and
    Airtable communication logging. Never write to Home or Reminders.
 5. **Operational email parity.** Move follow-ups, reminders, client
@@ -76,7 +78,8 @@ and a secure link back to the website for uploads or quote review.
 
 ## Decisions to confirm before event writes
 
-- Provisional-hold expiry duration.
+- Provisional-hold expiry duration (the staged endpoint enforces a 24-hour
+  maximum and requires an explicit expiry on each request).
 - Working hours, holidays, and whether weekends may be booked.
 - The full street address for Sarah's home base (the radius is currently a
   tunable starting assumption).

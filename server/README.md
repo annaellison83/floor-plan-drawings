@@ -48,3 +48,10 @@ The dry-run planner is:
 with JSON such as `{ "squareFeet": 2400, "service": "Black & White" }`. It
 returns policy-compliant worker/slot recommendations and delivery targets. It
 is read-only and does not change Airtable or iCloud.
+
+Provisional holds are staged behind `ENABLE_PROVISIONAL_HOLDS=false`. When
+explicitly enabled, `POST /api/icloud/appointments/hold` creates a deterministic
+tentative event only on a roster worker calendar. The request must include a
+`worker`, `jobKey`, `start`, `end`, and `expiresAt` (future, within 24 hours).
+`DELETE /api/icloud/appointments/hold` releases a hold by `holdId` and worker.
+Both endpoints require the admin token; Home and Reminders can never be used.

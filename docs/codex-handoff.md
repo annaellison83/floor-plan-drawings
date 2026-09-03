@@ -1,17 +1,19 @@
 # FloorPlanDrawings Codex Handoff
 
-Updated: 2026-09-02
+Updated: 2026-09-03
 
 ## Verified current state
 
 - Repository: `annaellison83/floor-plan-drawings`
 - Branch: `main`
-- Latest synced commit: `4d62d12` (`Open exact Airtable job after quote approval`)
+- Latest synced commit: `72bfa62` (`document availability and dry-run endpoints`)
 - Netlify website and functions remain live. Airtable remains the dashboard/source of truth. Render now sends the migrated QUOTE READY and approved-client quote emails.
 - Render service: `floorplan-drawings-backend` at `https://floor-plan-drawings.onrender.com`
 - Render settings: `npm install --prefix server`; `node server/index.js`; health path `/healthz`; Starter plan; auto-deploy from `main` enabled.
 - Render health is passing with Airtable, Gmail SMTP, and iCloud integrations enabled.
 - Protected read-only iCloud discovery and roster endpoints are live. The roster classifies `anna` as owner, `corrie`, `sarah`, and `ricardo` as workers, and excludes `Home` and `Reminders`.
+- Read-only worker availability is live at `/api/icloud/availability`; the dry-run planner is live at `/api/icloud/appointments/dry-run`.
+- Provisional hold create/release endpoints are staged behind `ENABLE_PROVISIONAL_HOLDS=false`; no event writes have been enabled.
 - No calendar events were created or modified.
 
 ## Email and quote safeguards
