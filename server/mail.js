@@ -5,15 +5,21 @@ function clean(value) {
 }
 
 function smtpConfig() {
-  const port = Number(clean(process.env.SMTP_PORT) || "465");
+  const icloudConfigured = Boolean(
+    clean(process.env.ICLOUD_SMTP_HOST) &&
+      clean(process.env.ICLOUD_SMTP_USER) &&
+      clean(process.env.ICLOUD_SMTP_APP_PASSWORD)
+  );
+  const prefix = icloudConfigured ? "ICLOUD_SMTP_" : "SMTP_";
+  const port = Number(clean(process.env[`${prefix}PORT`]) || "465");
 
   return {
-    host: clean(process.env.SMTP_HOST) || "smtp.gmail.com",
+    host: clean(process.env[`${prefix}HOST`]) || "smtp.gmail.com",
     port,
-    secure: clean(process.env.SMTP_SECURE).toLowerCase() !== "false",
+    secure: clean(process.env[`${prefix}SECURE`]).toLowerCase() !== "false",
     auth: {
-      user: clean(process.env.SMTP_USER),
-      pass: clean(process.env.SMTP_APP_PASSWORD).replace(/\s+/g, "")
+      user: clean(process.env[`${prefix}USER`]),
+      pass: clean(process.env[`${prefix}APP_PASSWORD`]).replace(/\s+/g, "")
     }
   };
 }
@@ -25,7 +31,7 @@ function isSmtpConfigured() {
 
 function createTransport() {
   if (!isSmtpConfigured()) {
-    throw new Error("Gmail SMTP is not configured");
+    throw new Error("SMTP is not configured");
   }
 
   return nodemailer.createTransport(smtpConfig());
@@ -36,7 +42,7 @@ async function verifySmtp() {
   await transport.verify();
 
   return {
-    provider: "gmail",
+    provider: clean(process.env.ICLOUD_SMTP_HOST) ? "icloud" : "smtp",
     authenticated: true,
     sender: clean(process.env.MAIL_FROM) || clean(process.env.SMTP_USER)
   };
