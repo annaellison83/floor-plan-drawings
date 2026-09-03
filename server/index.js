@@ -62,9 +62,11 @@ function isAuthorized(req) {
 }
 
 function integrationStatus() {
+  const smtpReady = isSmtpConfigured();
   return {
     airtable: Boolean(process.env.AIRTABLE_TOKEN && process.env.AIRTABLE_BASE_ID),
-    gmailSmtp: isSmtpConfigured(),
+    smtp: smtpReady,
+    gmailSmtp: Boolean(process.env.SMTP_USER && process.env.SMTP_APP_PASSWORD),
     icloud: Boolean(process.env.ICLOUD_EMAIL && process.env.ICLOUD_APP_PASSWORD),
     googleMaps: Boolean(process.env.GOOGLE_MAPS_STATIC_KEY || process.env.GOOGLE_MAPS_SERVER_KEY),
     postgres: Boolean(process.env.DATABASE_URL),
@@ -335,7 +337,7 @@ async function route(req, res) {
       return json(res, 200, await verifySmtp());
     } catch (error) {
       return json(res, 502, {
-        error: "Gmail SMTP verification failed",
+        error: "SMTP verification failed",
         detail: error.message
       });
     }
