@@ -340,6 +340,19 @@ async function createAppointmentProposalLog(input, options = {}) {
   });
 }
 
+async function listFailedDeliveries(options = {}) {
+  const settings = { ...config(), ...options };
+  if (!settings.token || !settings.baseId) throw new Error("Airtable is not configured");
+  const limit = Math.max(1, Math.min(50, Number(options.maxRecords) || 20));
+  const table = encodeURIComponent(settings.communicationLogTable);
+  const url = new URL(`${AIRTABLE_API}/${encodeURIComponent(settings.baseId)}/${table}`);
+  url.searchParams.set("filterByFormula", "{Delivery Status}='Failed'");
+  url.searchParams.set("maxRecords", String(limit));
+  ["Communication", "Job Record ID", "Event Type", "Email Subject", "Delivery Status", "Summary"].forEach((field) => url.searchParams.append("fields[]", field));
+  const body = await airtableJson(url.href, { token: settings.token });
+  return (body.records || []).map((record) => ({ id: record.id, ...record.fields }));
+}
+
 async function updateCommunicationLog(recordId, fields, options = {}) {
   const settings = { ...config(), ...options };
   const id = clean(recordId);
@@ -384,6 +397,7 @@ module.exports = {
   getApprovalState,
   listApprovedQuoteCandidates,
   listFollowUpCandidates,
+  listFailedDeliveries,
   listNewRequestCandidates,
   listPropertyReviewCandidates,
   listQuoteReadyCandidates,

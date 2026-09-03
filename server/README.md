@@ -57,6 +57,11 @@ tried only after the primary provider's retries fail. Set `DELIVERY_ALERT_EMAIL`
 to receive a failure alert after a delivery is marked failed; the alert never
 contains credentials.
 
+Anna can inspect the latest failed delivery records with the protected
+`GET /api/ops/delivery-failures` endpoint and the `X-Admin-Token` header. This
+endpoint is read-only and returns only workflow, record, subject, status, and
+summary fields.
+
 Appointment options are intentionally test-only by default. Keep
 `ENABLE_APPOINTMENT_PROPOSALS=true` for Anna's internal board if desired, but
 leave `ENABLE_CLIENT_QUOTE_SCHEDULING=false` until client-facing scheduling is

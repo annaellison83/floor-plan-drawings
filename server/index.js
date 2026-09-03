@@ -31,6 +31,7 @@ const {
   getApprovalState,
   getJob,
   listApprovedQuoteCandidates,
+  listFailedDeliveries,
   listFollowUpCandidates,
   listNewRequestCandidates,
   listPropertyReviewCandidates,
@@ -930,6 +931,16 @@ async function route(req, res) {
       status: "ok",
       integrations: integrationStatus()
     });
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/ops/delivery-failures") {
+    if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+    try {
+      const failures = await listFailedDeliveries({ maxRecords: url.searchParams.get("limit") });
+      return json(res, 200, { ok: true, readOnly: true, failures });
+    } catch (error) {
+      return json(res, 502, { error: "Delivery failure log unavailable", detail: error.message });
+    }
   }
 
   if ((req.method === "GET" || req.method === "POST") && url.pathname === "/api/scheduling/proposal/start") {
