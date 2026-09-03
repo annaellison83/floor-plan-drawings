@@ -3,6 +3,7 @@ const { discoverCalendars } = require("./icloud");
 const { buildRoster } = require("./calendar-roster");
 const { isSmtpConfigured, sendMail, verifySmtp } = require("./mail");
 const { quoteReadyEmail } = require("./email-templates");
+const { getJob } = require("./airtable");
 
 const PORT = Number(process.env.PORT) || 10000;
 const SERVICE_NAME = "floorplan-drawings-backend";
@@ -27,6 +28,17 @@ function json(res, status, body) {
     "X-Content-Type-Options": "nosniff"
   });
   res.end(JSON.stringify(body));
+}
+
+function html(res, status, body) {
+  res.writeHead(status, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "no-store, private",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer"
+  });
+  res.end(body);
 }
 
 function isAuthorized(req) {
@@ -164,6 +176,33 @@ async function route(req, res) {
     } catch (error) {
       return json(res, 502, {
         error: "Gmail SMTP verification failed",
+        detail: error.message
+      });
+    }
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/airtable/quote-ready-preview") {
+    if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+
+    try {
+      const recordId = clean(url.searchParams.get("recordId"));
+      const job = await getJob(recordId);
+      const preview = quoteReadyEmail(job);
+      if (url.searchParams.get("format") === "html") return html(res, 200, preview.html);
+      return json(res, 200, {
+        ok: true,
+        dryRun: true,
+        readOnly: true,
+        emailSent: false,
+        airtableRecordChanged: false,
+        recordId: job.recordId,
+        subject: preview.subject,
+        html: preview.html,
+        text: preview.text
+      });
+    } catch (error) {
+      return json(res, 502, {
+        error: "Airtable quote preview failed",
         detail: error.message
       });
     }
