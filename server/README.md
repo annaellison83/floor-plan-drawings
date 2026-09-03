@@ -1,8 +1,10 @@
 # FloorPlanDrawings backend
 
-This service is the first Render slice. It is intentionally small: it provides
-the Render health check and a protected, read-only iCloud CalDAV discovery
-endpoint. It does not create calendar events or change Airtable records yet.
+This service is the Render workflow engine for the FloorPlanDrawings site.
+Netlify remains the public intake website and Airtable remains the dashboard and
+source of truth. Render currently sends QUOTE READY, approved client quotes,
+NEW REQUEST, PROPERTY REVIEW NEEDED, and the daily FOLLOW-UP digest with
+idempotent Communication Log reservations. It does not create calendar events.
 
 ## Render settings
 

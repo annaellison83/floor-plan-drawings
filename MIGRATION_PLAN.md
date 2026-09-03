@@ -30,6 +30,10 @@ disabled as part of the preparatory work.
    logging is duplicate-safe; automatic inclusion in approved client quotes
    remains disabled with `ENABLE_CLIENT_QUOTE_SCHEDULING=false`, and calendar
    holds remain disabled until explicitly enabled.
+11. NEW REQUEST, PROPERTY REVIEW NEEDED, and FOLLOW-UP are live on Render with
+   per-workflow shadow flags false. Their Airtable sender automations remain
+   intact as a reversible rollback path and must be paused (not deleted) in
+   Airtable after Anna confirms Render delivery.
 
 ## Execution order
 
