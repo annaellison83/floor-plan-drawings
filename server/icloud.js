@@ -140,7 +140,10 @@ function timezoneOffsetMs(date, timeZone) {
 function parseIcsDate(rawValue, timeZone) {
   const value = String(rawValue || "").trim();
   const dateOnly = /^(\d{4})(\d{2})(\d{2})$/.exec(value);
-  if (dateOnly) return new Date(Date.UTC(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3])));
+  if (dateOnly) {
+    const guess = new Date(Date.UTC(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3])));
+    return timeZone ? new Date(guess.getTime() - timezoneOffsetMs(guess, timeZone)) : guess;
+  }
   const match = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(Z)?$/.exec(value);
   if (!match) return null;
   const guess = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]),
