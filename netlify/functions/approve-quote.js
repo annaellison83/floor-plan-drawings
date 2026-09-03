@@ -35,11 +35,12 @@ function page(statusCode, title, message, link = null) {
   };
 }
 
-function airtableRecordUrl(baseId, tableId, recordId) {
+function airtableRecordUrl(baseId, tableId, viewId, recordId) {
   if (!/^app[A-Za-z0-9]{14}$/.test(baseId)
     || !/^tbl[A-Za-z0-9]{14}$/.test(tableId)
+    || !/^viw[A-Za-z0-9]{14}$/.test(viewId)
     || !/^rec[A-Za-z0-9]{14}$/.test(recordId)) return "";
-  return `https://airtable.com/${baseId}/${tableId}/${recordId}`;
+  return `https://airtable.com/${baseId}/${tableId}/${viewId}/${recordId}?blocks=hide`;
 }
 
 function approvalPage(recordId, token, fields, notice = "") {
@@ -137,7 +138,8 @@ exports.handler = async (event) => {
   const baseId = cleanEnv(process.env.AIRTABLE_BASE_ID);
   const tableName = cleanEnv(process.env.AIRTABLE_JOBS_TABLE) || "Jobs";
   const tableId = cleanEnv(process.env.AIRTABLE_JOBS_TABLE_ID);
-  const recordUiUrl = airtableRecordUrl(baseId, tableId, recordId);
+  const viewId = cleanEnv(process.env.AIRTABLE_JOBS_VIEW_ID);
+  const recordUiUrl = airtableRecordUrl(baseId, tableId, viewId, recordId);
 
   if (!/^rec[A-Za-z0-9]{14}$/.test(recordId) || !/^[a-f0-9]{48}$/.test(providedToken)) {
     return page(400, "Approval link is incomplete", "Please use the newest approval email for this quote.");

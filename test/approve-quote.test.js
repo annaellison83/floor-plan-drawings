@@ -4,10 +4,10 @@ const { airtableRecordUrl, parseEdits } = require("../netlify/functions/approve-
 
 test("approval confirmation uses a direct Airtable record URL", () => {
   assert.equal(
-    airtableRecordUrl("appBq1xl0G5vCegAH", "tbl6iNAIVKLb9QcYi", "recOJNBI1XANzHKy5"),
-    "https://airtable.com/appBq1xl0G5vCegAH/tbl6iNAIVKLb9QcYi/recOJNBI1XANzHKy5"
+    airtableRecordUrl("appBq1xl0G5vCegAH", "tbl6iNAIVKLb9QcYi", "viwQRZQIUr0hbAzv7", "recOJNBI1XANzHKy5"),
+    "https://airtable.com/appBq1xl0G5vCegAH/tbl6iNAIVKLb9QcYi/viwQRZQIUr0hbAzv7/recOJNBI1XANzHKy5?blocks=hide"
   );
-  assert.equal(airtableRecordUrl("bad", "tbl6iNAIVKLb9QcYi", "recOJNBI1XANzHKy5"), "");
+  assert.equal(airtableRecordUrl("bad", "tbl6iNAIVKLb9QcYi", "viwQRZQIUr0hbAzv7", "recOJNBI1XANzHKy5"), "");
 });
 
 test("manually entered project size is labeled as Anna-confirmed", () => {
