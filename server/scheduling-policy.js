@@ -1,7 +1,9 @@
 const DEFAULT_APPOINTMENT_STARTS = ["11:00", "13:00"];
 const DEFAULT_APPOINTMENT_MINUTES = 90;
+const DURATION_INCREMENT_MINUTES = 30;
 const SMALL_PROJECT_SQ_FT = 3000;
 const LARGE_PROJECT_SQ_FT = 5000;
+const SARAH_NEARBY_RADIUS_MILES = 5;
 const DELIVERY_DAYS = { blackAndWhite: 2, color: 3 };
 const BATCH_BOOKING_POLICY = {
   bookingWeekdays: [1, 2], // Monday and Tuesday
@@ -42,6 +44,11 @@ function number(value) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
+function distanceNumber(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
 function weekdayNumber(value) {
   if (Number.isInteger(value) && value >= 0 && value <= 6) return value;
   const match = String(value || "").trim().toLowerCase().slice(0, 3);
@@ -51,9 +58,9 @@ function weekdayNumber(value) {
 function appointmentDurationMinutes(squareFeet) {
   const sqFt = number(squareFeet);
   if (sqFt === null) return null;
-  // Anna's stated 1.5-hour default applies to projects up to 3,000 sq ft.
-  // Larger projects need an explicit duration until a larger-project estimate is set.
-  return sqFt <= SMALL_PROJECT_SQ_FT ? DEFAULT_APPOINTMENT_MINUTES : null;
+  // Starting estimate: scale Anna's 1.5-hour / 3,000 sq ft baseline linearly.
+  return Math.ceil((sqFt / SMALL_PROJECT_SQ_FT) * DEFAULT_APPOINTMENT_MINUTES / DURATION_INCREMENT_MINUTES)
+    * DURATION_INCREMENT_MINUTES;
 }
 
 function deliveryDaysForService(service) {
@@ -70,14 +77,23 @@ function deliveryTargetForWeekday(weekday) {
   return { weekday: null, label: "Needs scheduling review", endOfDay: false };
 }
 
-function canWorkerTake(workerName, { squareFeet, nearbyToSarah = false, appointmentsToday = 0 } = {}) {
+function canWorkerTake(workerName, {
+  squareFeet,
+  nearbyToSarah = false,
+  milesFromSarah,
+  appointmentsToday = 0
+} = {}) {
   const name = String(workerName || "").trim().toLowerCase();
   const policy = WORKER_POLICY[name];
   if (!policy) return false;
 
   const sqFt = number(squareFeet);
   if (policy.smallProjectOnly && (sqFt === null || sqFt > SMALL_PROJECT_SQ_FT)) return false;
-  if (policy.nearbyOnly && nearbyToSarah !== true) return false;
+  if (policy.nearbyOnly) {
+    const distance = distanceNumber(milesFromSarah);
+    const nearby = nearbyToSarah === true || (distance !== null && distance <= SARAH_NEARBY_RADIUS_MILES);
+    if (!nearby) return false;
+  }
   if (sqFt !== null && sqFt >= LARGE_PROJECT_SQ_FT && policy.largeProjectMaxPerDay < 1) return false;
 
   const dailyLimit = sqFt !== null && sqFt >= LARGE_PROJECT_SQ_FT
@@ -86,12 +102,13 @@ function canWorkerTake(workerName, { squareFeet, nearbyToSarah = false, appointm
   return appointmentsToday < dailyLimit;
 }
 
-function rankWorkers({ weekday, squareFeet, nearbyToSarah = false, bookedThisWeek = {}, bookedToday = {} } = {}) {
+function rankWorkers({ weekday, squareFeet, nearbyToSarah = false, milesFromSarah, bookedThisWeek = {}, bookedToday = {} } = {}) {
   const day = weekdayNumber(weekday);
   const candidates = Object.entries(WORKER_POLICY)
     .filter(([name]) => canWorkerTake(name, {
       squareFeet,
       nearbyToSarah,
+      milesFromSarah,
       appointmentsToday: Number(bookedToday[name]) || 0
     }))
     .map(([name, policy]) => {
@@ -120,7 +137,7 @@ function schedulingPolicy() {
     appointmentStarts: [...DEFAULT_APPOINTMENT_STARTS],
     defaultAppointmentMinutes: DEFAULT_APPOINTMENT_MINUTES,
     defaultAppointmentScope: `projects at or under ${SMALL_PROJECT_SQ_FT.toLocaleString()} sq ft`,
-    largerProjectDuration: "needs review",
+    largerProjectDuration: `linear scaling from 90 minutes per 3,000 sq ft, rounded up to ${DURATION_INCREMENT_MINUTES}-minute increments`,
     delivery: {
       serviceDays: { ...DELIVERY_DAYS },
       weekdayTargets: {
@@ -135,7 +152,7 @@ function schedulingPolicy() {
     workers: WORKER_POLICY,
     assumptions: [
       "Ricky is represented by the Ricardo calendar.",
-      "Sarah requires an explicit nearbyToSarah=true flag; no mileage threshold was supplied.",
+      `Sarah's nearby radius starts at ${SARAH_NEARBY_RADIUS_MILES} miles from 431 Marie; tune this threshold after observing bookings.`,
       "Projects at or above 5,000 sq ft are large-project appointments."
     ]
   };
@@ -150,8 +167,10 @@ module.exports = {
   schedulingPolicy,
   DEFAULT_APPOINTMENT_STARTS,
   DEFAULT_APPOINTMENT_MINUTES,
+  DURATION_INCREMENT_MINUTES,
   SMALL_PROJECT_SQ_FT,
   LARGE_PROJECT_SQ_FT,
+  SARAH_NEARBY_RADIUS_MILES,
   DELIVERY_DAYS,
   BATCH_BOOKING_POLICY
 };

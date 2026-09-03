@@ -11,7 +11,8 @@ const {
 
 test("uses the 1.5-hour default for projects up to 3,000 sq ft", () => {
   assert.equal(appointmentDurationMinutes(3000), 90);
-  assert.equal(appointmentDurationMinutes(3001), null);
+  assert.equal(appointmentDurationMinutes(4500), 150);
+  assert.equal(appointmentDurationMinutes(5000), 150);
 });
 
 test("Corrie can only take one 5,000+ sq ft appointment in a day", () => {
@@ -21,9 +22,9 @@ test("Corrie can only take one 5,000+ sq ft appointment in a day", () => {
 });
 
 test("Sarah is limited to nearby small-house spillover", () => {
-  assert.equal(canWorkerTake("sarah", { squareFeet: 1800, nearbyToSarah: false }), false);
-  assert.equal(canWorkerTake("sarah", { squareFeet: 1800, nearbyToSarah: true }), true);
-  assert.equal(canWorkerTake("sarah", { squareFeet: 3200, nearbyToSarah: true }), false);
+  assert.equal(canWorkerTake("sarah", { squareFeet: 1800, milesFromSarah: 5.1 }), false);
+  assert.equal(canWorkerTake("sarah", { squareFeet: 1800, milesFromSarah: 5 }), true);
+  assert.equal(canWorkerTake("sarah", { squareFeet: 3200, milesFromSarah: 2 }), false);
 });
 
 test("Corrie is preferred on her preferred weekdays before Ricky", () => {
@@ -40,7 +41,7 @@ test("Sarah remains spillover behind primary workers", () => {
   const ranked = rankWorkers({
     weekday: "Wednesday",
     squareFeet: 1800,
-    nearbyToSarah: true,
+    milesFromSarah: 5,
     bookedThisWeek: { corrie: 4, ricky: 2, sarah: 0 },
     bookedToday: { corrie: 2, ricky: 2, sarah: 0 }
   });
