@@ -1,5 +1,11 @@
 const http = require("node:http");
-const { discoverCalendars, getCalendarAvailability } = require("./icloud");
+const crypto = require("node:crypto");
+const {
+  createProvisionalHold,
+  discoverCalendars,
+  getCalendarAvailability,
+  releaseProvisionalHold
+} = require("./icloud");
 const { buildRoster } = require("./calendar-roster");
 const { appointmentDurationMinutes, schedulingPolicy } = require("./scheduling-policy");
 const { planAppointments } = require("./appointment-planner");
@@ -73,7 +79,8 @@ function integrationStatus() {
     googleMaps: Boolean(process.env.GOOGLE_MAPS_STATIC_KEY || process.env.GOOGLE_MAPS_SERVER_KEY),
     postgres: Boolean(process.env.DATABASE_URL),
     quoteReadySendEnabled: clean(process.env.ENABLE_QUOTE_READY_SENDS).toLowerCase() === "true",
-    clientQuoteSendEnabled: clean(process.env.ENABLE_CLIENT_QUOTE_SENDS).toLowerCase() === "true"
+    clientQuoteSendEnabled: clean(process.env.ENABLE_CLIENT_QUOTE_SENDS).toLowerCase() === "true",
+    provisionalHoldsEnabled: provisionalHoldEnabled()
   };
 }
 
@@ -83,6 +90,25 @@ function quoteReadyEnabled() {
 
 function clientQuoteEnabled() {
   return clean(process.env.ENABLE_CLIENT_QUOTE_SENDS).toLowerCase() === "true";
+}
+
+function provisionalHoldEnabled() {
+  return clean(process.env.ENABLE_PROVISIONAL_HOLDS).toLowerCase() === "true";
+}
+
+function holdId({ jobKey, worker, start }) {
+  return `fpd-hold-${crypto.createHash("sha256").update(`${jobKey}|${worker}|${start}`).digest("hex")}`;
+}
+
+function workerCalendar(roster, worker) {
+  const requested = clean(worker).toLowerCase();
+  const calendarName = requested === "ricky" ? "ricardo" : requested;
+  return roster.workers.find((calendar) => clean(calendar.name).toLowerCase() === calendarName) || null;
+}
+
+function validDate(value) {
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date : null;
 }
 
 function localDate() {
@@ -414,6 +440,91 @@ async function route(req, res) {
       return json(res, 200, { ...plan, availability: { startDate: availability.startDate, days: availability.days } });
     } catch (error) {
       return json(res, 502, { error: "Dry-run appointment planning failed", detail: error.message });
+    }
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/icloud/appointments/hold") {
+    if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+    if (!provisionalHoldEnabled()) {
+      return json(res, 503, { error: "Provisional holds are disabled", enabled: false, eventCreated: false });
+    }
+    try {
+      const requestBody = await readJsonBody(req);
+      const start = validDate(requestBody.start);
+      const end = validDate(requestBody.end);
+      const expiresAt = validDate(requestBody.expiresAt);
+      const jobKey = clean(requestBody.jobKey);
+      const worker = clean(requestBody.worker || requestBody.calendar).toLowerCase();
+      if (!jobKey || !worker || !start || !end || !expiresAt || end <= start) {
+        return json(res, 400, { error: "worker, jobKey, start, end, and expiresAt are required; end must follow start" });
+      }
+      const now = Date.now();
+      if (expiresAt.getTime() <= now || expiresAt.getTime() > now + 24 * 60 * 60 * 1000) {
+        return json(res, 400, { error: "expiresAt must be in the future and within 24 hours" });
+      }
+      const discovered = await discoverCalendars({
+        email: clean(process.env.ICLOUD_EMAIL),
+        password: clean(process.env.ICLOUD_APP_PASSWORD)
+      });
+      const roster = buildRoster(discovered.calendars);
+      const calendar = workerCalendar(roster, worker);
+      if (!calendar) return json(res, 400, { error: "Unknown or non-bookable worker calendar" });
+      const id = holdId({ jobKey, worker: calendar.name, start: start.toISOString() });
+      const result = await createProvisionalHold({
+        calendar,
+        email: clean(process.env.ICLOUD_EMAIL),
+        password: clean(process.env.ICLOUD_APP_PASSWORD),
+        uid: id,
+        start,
+        end,
+        expiresAt,
+        summary: clean(requestBody.summary) || `FloorPlanDrawings provisional hold — ${jobKey}`,
+        description: clean(requestBody.description) || "Provisional appointment hold; not yet confirmed"
+      });
+      return json(res, result.duplicate ? 409 : 201, {
+        readOnly: false,
+        provisional: true,
+        eventCreated: result.created,
+        duplicate: result.duplicate,
+        holdId: id,
+        worker: calendar.name,
+        start: start.toISOString(),
+        end: end.toISOString(),
+        expiresAt: expiresAt.toISOString(),
+        calendarUrl: result.url
+      });
+    } catch (error) {
+      return json(res, 502, { error: "Provisional hold failed", detail: error.message });
+    }
+  }
+
+  if (req.method === "DELETE" && url.pathname === "/api/icloud/appointments/hold") {
+    if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+    if (!provisionalHoldEnabled()) {
+      return json(res, 503, { error: "Provisional holds are disabled", enabled: false, eventDeleted: false });
+    }
+    try {
+      const requestBody = await readJsonBody(req);
+      const id = clean(requestBody.holdId || url.searchParams.get("holdId"));
+      const worker = clean(requestBody.worker || url.searchParams.get("worker"));
+      if (!/^fpd-hold-[a-f0-9]{64}$/.test(id) || !worker) {
+        return json(res, 400, { error: "A valid holdId and worker are required" });
+      }
+      const discovered = await discoverCalendars({
+        email: clean(process.env.ICLOUD_EMAIL),
+        password: clean(process.env.ICLOUD_APP_PASSWORD)
+      });
+      const calendar = workerCalendar(buildRoster(discovered.calendars), worker);
+      if (!calendar) return json(res, 400, { error: "Unknown or non-bookable worker calendar" });
+      const result = await releaseProvisionalHold({
+        calendar,
+        email: clean(process.env.ICLOUD_EMAIL),
+        password: clean(process.env.ICLOUD_APP_PASSWORD),
+        uid: id
+      });
+      return json(res, 200, { provisional: true, eventDeleted: result.released, missing: result.missing, holdId: id, worker: calendar.name });
+    } catch (error) {
+      return json(res, 502, { error: "Provisional hold release failed", detail: error.message });
     }
   }
 

@@ -251,6 +251,82 @@ async function getCalendarAvailability({ email, password, calendars, startDate, 
   return { readOnly: true, startDate, days, durationMinutes, calendars: results };
 }
 
+function calendarEventUrl(calendarUrl, uid) {
+  return `${String(calendarUrl || "").replace(/\/?$/, "/")}${encodeURIComponent(uid)}.ics`;
+}
+
+function icsEscape(value) {
+  return String(value || "")
+    .replace(/\\/g, "\\\\")
+    .replace(/;/g, "\\;")
+    .replace(/,/g, "\\,")
+    .replace(/\r?\n/g, "\\n");
+}
+
+function icsUtc(date) {
+  return new Date(date).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+}
+
+function provisionalHoldIcs({ uid, start, end, summary, description, expiresAt }) {
+  return [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//FloorPlanDrawings//Render//EN",
+    "CALSCALE:GREGORIAN",
+    "METHOD:PUBLISH",
+    "BEGIN:VEVENT",
+    `UID:${icsEscape(uid)}`,
+    `DTSTAMP:${icsUtc(new Date())}`,
+    `DTSTART:${icsUtc(start)}`,
+    `DTEND:${icsUtc(end)}`,
+    `SUMMARY:${icsEscape(summary || "FloorPlanDrawings provisional hold")}`,
+    `DESCRIPTION:${icsEscape(description || "Provisional appointment hold; not yet confirmed")}`,
+    "X-FPD-HOLD:TRUE",
+    `X-FPD-HOLD-EXPIRES:${icsUtc(expiresAt)}`,
+    "STATUS:TENTATIVE",
+    "TRANSP:OPAQUE",
+    "END:VEVENT",
+    "END:VCALENDAR",
+    ""
+  ].join("\\r\\n");
+}
+
+async function createProvisionalHold({ calendar, email, password, uid, start, end, summary, description, expiresAt }) {
+  const url = calendarEventUrl(calendar.url, uid);
+  const response = await fetch(url, {
+    method: "PUT",
+    headers: {
+      Authorization: `Basic ${Buffer.from(`${email}:${password}`).toString("base64")}`,
+      "Content-Type": "text/calendar; charset=utf-8",
+      "If-None-Match": "*"
+    },
+    body: provisionalHoldIcs({ uid, start, end, summary, description, expiresAt }),
+    signal: AbortSignal.timeout(12000)
+  });
+  const text = await response.text();
+  if (response.status === 412 || response.status === 409) {
+    return { created: false, duplicate: true, status: response.status, url, detail: "A hold already exists for this idempotency key" };
+  }
+  if (!response.ok) throw new Error(`iCloud CalDAV hold create returned HTTP ${response.status}`);
+  return { created: true, duplicate: false, status: response.status, url, etag: response.headers.get("etag") || null, detail: text || null };
+}
+
+async function releaseProvisionalHold({ calendar, email, password, uid }) {
+  const url = calendarEventUrl(calendar.url, uid);
+  const response = await fetch(url, {
+    method: "DELETE",
+    headers: {
+      Authorization: `Basic ${Buffer.from(`${email}:${password}`).toString("base64")}`,
+      "If-Match": "*"
+    },
+    signal: AbortSignal.timeout(12000)
+  });
+  const text = await response.text();
+  if (response.status === 404) return { released: false, missing: true, status: response.status, url };
+  if (!response.ok) throw new Error(`iCloud CalDAV hold release returned HTTP ${response.status}`);
+  return { released: true, missing: false, status: response.status, url, detail: text || null };
+}
+
 async function discoverCalendars({ email, password }) {
   if (!email || !password) {
     throw new Error("ICLOUD_EMAIL and ICLOUD_APP_PASSWORD are required");
@@ -307,4 +383,11 @@ async function discoverCalendars({ email, password }) {
   };
 }
 
-module.exports = { discoverCalendars, getCalendarAvailability, parseIcsEvents };
+module.exports = {
+  discoverCalendars,
+  getCalendarAvailability,
+  parseIcsEvents,
+  createProvisionalHold,
+  releaseProvisionalHold,
+  provisionalHoldIcs
+};
