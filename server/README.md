@@ -49,6 +49,20 @@ with JSON such as `{ "squareFeet": 2400, "service": "Black & White" }`. It
 returns policy-compliant worker/slot recommendations and delivery targets. It
 is read-only and does not change Airtable or iCloud.
 
+## Delivery safety
+
+Render retries transient SMTP failures a bounded number of times (`MAIL_MAX_ATTEMPTS`,
+default 3). If a second provider is configured with `FALLBACK_SMTP_*`, it is
+tried only after the primary provider's retries fail. Set `DELIVERY_ALERT_EMAIL`
+to receive a failure alert after a delivery is marked failed; the alert never
+contains credentials.
+
+Appointment options are intentionally test-only by default. Keep
+`ENABLE_APPOINTMENT_PROPOSALS=true` for Anna's internal board if desired, but
+leave `ENABLE_CLIENT_QUOTE_SCHEDULING=false` until client-facing scheduling is
+approved. Enabling the second flag is what adds live options to approved client
+quote emails.
+
 ## Appointment proposals
 
 The protected preview endpoint is:

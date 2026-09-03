@@ -17,6 +17,15 @@ test("client estimate stays visibly unverified", () => {
   assert.match(result.label, /client estimate/);
 });
 
+test("listing estimates provide a labeled fallback without becoming verified", () => {
+  const result = resolveSquareFootage({ zillowSqFt: 1200, redfinSqFt: 1250 });
+  assert.equal(result.value, 1250);
+  assert.equal(result.verified, false);
+  assert.equal(result.canAutoQuote, false);
+  assert.match(result.label, /Redfin estimate/);
+  assert.match(result.source, /verification required/);
+});
+
 test("lot size is never accepted as building square footage", () => {
   const result = resolveSquareFootage({ lotSqFt: 12000 });
   assert.equal(result.value, null);

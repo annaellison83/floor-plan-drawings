@@ -10,7 +10,7 @@ const { buildRoster } = require("./calendar-roster");
 const { appointmentDurationMinutes, deliveryTargetForWeekday, schedulingPolicy } = require("./scheduling-policy");
 const { planAppointments } = require("./appointment-planner");
 const { proposalPayload, signProposal, verifyProposal } = require("./appointment-proposals");
-const { isSmtpConfigured, sendMail, verifySmtp } = require("./mail");
+const { isSmtpConfigured, sendFailureAlert, sendMail, verifySmtp } = require("./mail");
 const {
   clientQuoteEmail,
   clientAvailabilityProposalEmail,
@@ -109,6 +109,9 @@ function integrationStatus() {
     propertyReviewSendEnabled: propertyReviewEnabled(),
     followUpSendEnabled: followUpEnabled(),
     appointmentProposalSendEnabled: appointmentProposalEnabled(),
+    clientQuoteSchedulingEnabled: clientQuoteSchedulingEnabled(),
+    deliveryAlertsEnabled: Boolean(clean(process.env.DELIVERY_ALERT_EMAIL)),
+    smtpFallbackConfigured: Boolean(clean(process.env.FALLBACK_SMTP_HOST) && clean(process.env.FALLBACK_SMTP_USER) && clean(process.env.FALLBACK_SMTP_APP_PASSWORD)),
     appointmentProposalHoldEnabled: provisionalHoldEnabled()
   };
 }
@@ -135,6 +138,13 @@ function followUpEnabled() {
 
 function appointmentProposalEnabled() {
   return clean(process.env.ENABLE_APPOINTMENT_PROPOSALS).toLowerCase() === "true";
+}
+
+// The availability board can stay enabled for Anna's internal testing while
+// client quote emails remain opt-in behind a separate production flag.
+function clientQuoteSchedulingEnabled() {
+  return appointmentProposalEnabled()
+    && clean(process.env.ENABLE_CLIENT_QUOTE_SCHEDULING).toLowerCase() === "true";
 }
 
 function provisionalHoldEnabled() {
@@ -571,6 +581,7 @@ async function deliverQuoteReady(recordId) {
         Summary: `Render delivery failed: ${error.message}`
       }).catch(() => {});
     }
+    await sendFailureAlert({ workflow: "QUOTE READY", recordId, error });
     return { ok: false, status: 502, error: "QUOTE READY delivery failed", detail: error.message };
   } finally {
     quoteReadyLocks.delete(recordId);
@@ -605,7 +616,7 @@ async function deliverClientQuote(recordId) {
     if (!Number.isFinite(Number(job.finalQuote)) || Number(job.finalQuote) <= 0) throw new Error("Approved quote amount is missing");
     let proposalUrl = "";
     let proposalSlots = [];
-    if (appointmentProposalEnabled()) {
+    if (clientQuoteSchedulingEnabled()) {
       try {
         const built = await buildAppointmentProposal(recordId);
         const proposalToken = signProposal(built.payload);
@@ -651,6 +662,7 @@ async function deliverClientQuote(recordId) {
         Summary: `Render client quote delivery failed: ${error.message}`
       }).catch(() => {});
     }
+    await sendFailureAlert({ workflow: "CLIENT QUOTE", recordId, error });
     return { ok: false, status: 502, error: "Client quote delivery failed", detail: error.message };
   } finally {
     clientQuoteLocks.delete(recordId);
@@ -703,6 +715,7 @@ async function deliverInternalNotification(recordId, eventType, buildEmail, stat
     return { ok: true, status: 200, recordId, logRecordId, delivery: "sent" };
   } catch (error) {
     if (logRecordId) await updateCommunicationLog(logRecordId, { "Delivery Status": "Failed", Summary: `Render delivery failed: ${error.message}` }).catch(() => {});
+    await sendFailureAlert({ workflow: eventType, recordId, error });
     return { ok: false, status: 502, error: `${eventType} delivery failed`, detail: error.message };
   } finally {
     internalNotificationLocks.delete(lockKey);
@@ -777,6 +790,7 @@ async function pollFollowUps() {
       followUpRunDate = today;
     } catch (error) {
       await updateCommunicationLog(logRecordId, { "Delivery Status": "Failed", Summary: `Render follow-up delivery failed: ${error.message}` }).catch(() => {});
+      await sendFailureAlert({ workflow: "FOLLOW-UP", recordId: "daily-follow-up", error });
       throw error;
     }
   } catch (error) {

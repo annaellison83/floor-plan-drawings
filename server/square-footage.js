@@ -15,6 +15,29 @@ function resolveSquareFootage(input = {}) {
     };
   }
 
+  // Listing data is a useful recovery path when the assessor record is
+  // missing, but it remains explicitly unverified so it cannot silently drive
+  // automatic pricing.
+  const listingSources = [
+    ["Redfin", input.redfinSqFt],
+    ["Zillow", input.zillowSqFt],
+    ["Realtor.com", input.realtorSqFt],
+    ["Homes.com", input.homesSqFt],
+    ["Listing", input.listingSqFt]
+  ];
+  const listing = listingSources.find(([, value]) => positiveNumber(value));
+  if (listing) {
+    const [source, value] = listing;
+    const sqft = positiveNumber(value);
+    return {
+      value: sqft,
+      label: `${sqft.toLocaleString()} sq ft — ${source} estimate`,
+      source: `${source} listing estimate; verification required`,
+      verified: false,
+      canAutoQuote: false
+    };
+  }
+
   const submittedSqFt = positiveNumber(input.submittedSqFt ?? input.approxSqFt);
   if (submittedSqFt) {
     return {
