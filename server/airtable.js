@@ -70,6 +70,7 @@ function mapJob(record, options = {}) {
 }
 
 function config(env = process.env) {
+  const followUpMaxAge = clean(env.FOLLOW_UP_MAX_AGE_DAYS);
   return {
     token: clean(env.AIRTABLE_TOKEN),
     baseId: clean(env.AIRTABLE_BASE_ID),
@@ -78,8 +79,8 @@ function config(env = process.env) {
     communicationLogTable: clean(env.AIRTABLE_COMMUNICATION_LOG_TABLE) || "Communication Log",
     // Prevent a Render cutover from reviving indefinitely stale follow-ups.
     // Set to 0 to preserve the legacy unbounded Airtable rule.
-    followUpMaxAgeDays: Number.isFinite(Number(env.FOLLOW_UP_MAX_AGE_DAYS))
-      ? Math.max(0, Math.floor(Number(env.FOLLOW_UP_MAX_AGE_DAYS)))
+    followUpMaxAgeDays: followUpMaxAge !== "" && Number.isFinite(Number(followUpMaxAge))
+      ? Math.max(0, Math.floor(Number(followUpMaxAge)))
       : 90,
     approvalBaseUrl: clean(env.QUOTE_APPROVAL_URL),
     proposalReviewBaseUrl: clean(env.PROPOSAL_REVIEW_BASE_URL) || "https://floor-plan-drawings.onrender.com/api/scheduling/proposal/start"
