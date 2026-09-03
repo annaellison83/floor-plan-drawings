@@ -3,7 +3,7 @@ const { discoverCalendars } = require("./icloud");
 const { buildRoster } = require("./calendar-roster");
 const { isSmtpConfigured, sendMail, verifySmtp } = require("./mail");
 const { quoteReadyEmail } = require("./email-templates");
-const { getJob } = require("./airtable");
+const { findQuoteReadyDeliveries, getJob } = require("./airtable");
 
 const PORT = Number(process.env.PORT) || 10000;
 const SERVICE_NAME = "floorplan-drawings-backend";
@@ -189,12 +189,19 @@ async function route(req, res) {
       const job = await getJob(recordId);
       const preview = quoteReadyEmail(job);
       if (url.searchParams.get("format") === "html") return html(res, 200, preview.html);
+      const priorDeliveries = await findQuoteReadyDeliveries(recordId);
       return json(res, 200, {
         ok: true,
         dryRun: true,
         readOnly: true,
         emailSent: false,
         airtableRecordChanged: false,
+        deliveryGuard: {
+          allowed: priorDeliveries.length === 0,
+          reason: priorDeliveries.length === 0 ? "No prior sent QUOTE READY log found" : "Already sent",
+          priorSentCount: priorDeliveries.length,
+          priorDeliveryRecordIds: priorDeliveries.map((delivery) => delivery.id)
+        },
         recordId: job.recordId,
         subject: preview.subject,
         html: preview.html,

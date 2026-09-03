@@ -31,7 +31,7 @@ function mapJob(record, options = {}) {
     clientEmail: first(fields, ["Client Email", "Email"]),
     clientPhone: first(fields, ["Client Phone", "Phone"]),
     service: first(fields, ["Drawing Style", "Service Requested", "Service"]),
-    workflow: first(fields, ["Workflow", "Request Type"]) || "Quick Quote",
+    workflow: first(fields, ["Website Workflow", "Workflow", "Request Type"]) || "Quick Quote",
     status: first(fields, ["Status"]),
     quoteZone: first(fields, ["Quote Zone", "Zone"]),
     milesFromNorthHollywood: first(fields, ["Miles From North Hollywood"]),
@@ -58,8 +58,46 @@ function config(env = process.env) {
     baseId: clean(env.AIRTABLE_BASE_ID),
     jobsTable: clean(env.AIRTABLE_JOBS_TABLE) || "Jobs",
     jobsTableId: clean(env.AIRTABLE_JOBS_TABLE_ID),
+    communicationLogTable: clean(env.AIRTABLE_COMMUNICATION_LOG_TABLE) || "Communication Log",
     approvalBaseUrl: clean(env.QUOTE_APPROVAL_URL)
   };
+}
+
+function communicationKey(recordId, eventType, version = "v1") {
+  return [clean(recordId), clean(eventType).toLowerCase().replace(/[^a-z0-9]+/g, "_"), clean(version)]
+    .filter(Boolean)
+    .join(":");
+}
+
+function quoteReadyLogFields({ recordId, subject, status = "Pending", summary = "" }) {
+  return {
+    Communication: communicationKey(recordId, "quote_ready"),
+    "Job Record ID": clean(recordId),
+    Direction: "Outgoing",
+    Channel: "Email",
+    "Event Type": "QUOTE READY",
+    "Email Subject": clean(subject),
+    "Delivery Status": status,
+    Summary: clean(summary)
+  };
+}
+
+async function airtableJson(url, { token, method = "GET", body } = {}) {
+  const response = await fetch(url, {
+    method,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/json",
+      ...(body ? { "Content-Type": "application/json" } : {})
+    },
+    ...(body ? { body: JSON.stringify(body) } : {})
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = result && result.error && (result.error.message || result.error.type);
+    throw new Error(`Airtable ${method.toLowerCase()} failed (${response.status})${message ? `: ${message}` : ""}`);
+  }
+  return result;
 }
 
 async function getJob(recordId, options = {}) {
@@ -70,15 +108,7 @@ async function getJob(recordId, options = {}) {
 
   const table = settings.jobsTableId || settings.jobsTable;
   const url = `${AIRTABLE_API}/${encodeURIComponent(settings.baseId)}/${encodeURIComponent(table)}/${encodeURIComponent(id)}`;
-  const response = await fetch(url, {
-    method: "GET",
-    headers: { Authorization: `Bearer ${settings.token}`, Accept: "application/json" }
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const message = body && body.error && (body.error.message || body.error.type);
-    throw new Error(`Airtable read failed (${response.status})${message ? `: ${message}` : ""}`);
-  }
+  const body = await airtableJson(url, { token: settings.token });
 
   return mapJob(body, {
     baseId: settings.baseId,
@@ -87,4 +117,40 @@ async function getJob(recordId, options = {}) {
   });
 }
 
-module.exports = { config, getJob, mapJob };
+async function findQuoteReadyDeliveries(recordId, options = {}) {
+  const settings = { ...config(), ...options };
+  const id = clean(recordId);
+  if (!settings.token || !settings.baseId) throw new Error("Airtable is not configured");
+  if (!id || !/^rec[a-zA-Z0-9]+$/.test(id)) throw new Error("A valid Airtable record ID is required");
+
+  const formula = `AND({Job Record ID}='${id}',{Event Type}='QUOTE READY',{Delivery Status}='Sent')`;
+  const url = new URL(`${AIRTABLE_API}/${encodeURIComponent(settings.baseId)}/${encodeURIComponent(settings.communicationLogTable)}`);
+  url.searchParams.set("filterByFormula", formula);
+  url.searchParams.set("maxRecords", "10");
+  url.searchParams.append("fields[]", "Communication");
+  url.searchParams.append("fields[]", "Email Subject");
+  url.searchParams.append("fields[]", "Delivery Status");
+  const body = await airtableJson(url.href, { token: settings.token });
+  return (body.records || []).map((record) => ({ id: record.id, ...record.fields }));
+}
+
+async function createQuoteReadyLog(input, options = {}) {
+  const settings = { ...config(), ...options };
+  if (!settings.token || !settings.baseId) throw new Error("Airtable is not configured");
+  const url = `${AIRTABLE_API}/${encodeURIComponent(settings.baseId)}/${encodeURIComponent(settings.communicationLogTable)}`;
+  return airtableJson(url, {
+    token: settings.token,
+    method: "POST",
+    body: { records: [{ fields: quoteReadyLogFields(input) }], typecast: false }
+  });
+}
+
+module.exports = {
+  communicationKey,
+  config,
+  createQuoteReadyLog,
+  findQuoteReadyDeliveries,
+  getJob,
+  mapJob,
+  quoteReadyLogFields
+};
