@@ -97,6 +97,8 @@ test("quote ready email exposes the separate availability proposal action", () =
     availabilityReviewUrl: "https://floor-plan-drawings.onrender.com/api/scheduling/proposal/start?recordId=rec123&token=abc"
   });
   assert.match(html, /Check availability &amp; send options/);
+  assert.match(html, /class="availability"/);
+  assert.match(html, /Optional appointment availability/);
   assert.match(text, /Check availability and send appointment options/);
 });
 
