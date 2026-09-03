@@ -1,4 +1,5 @@
 const AIRTABLE_API_URL = "https://api.airtable.com/v0";
+const { resolveQuoteZone } = require("../../server/quote-zone");
 const CAMS_QUERY_URL = "https://arcgis.gis.lacounty.gov/arcgis/rest/services/LACounty_Dynamic/CAMS/MapServer/1/query";
 const AERIAL_EXPORT_URL = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export";
 const GOOGLE_STATIC_MAP_URL = "https://maps.googleapis.com/maps/api/staticmap";
@@ -712,6 +713,10 @@ function researchNote(research) {
   }
 
   const candidate = research.candidate;
+  const quoteZone = resolveQuoteZone({
+    milesFromNorthHollywood: research.milesFromNorthHollywood,
+    milesFromMontereyPark: research.milesFromMontereyPark
+  });
   return [
     `[Property research ${timestamp}] Possible public GIS match: ${candidate.fullAddress || research.address}`,
     candidate.ain && `AIN/APN candidate: ${candidate.ain}`,
@@ -724,6 +729,7 @@ function researchNote(research) {
     research.countyAssessor && research.countyAssessor.units && `LA County assessor units: ${research.countyAssessor.units}`,
     research.milesFromNorthHollywood !== null && `Approx. miles from North Hollywood: ${research.milesFromNorthHollywood}`,
     research.milesFromMontereyPark !== null && `Approx. miles from Monterey Park: ${research.milesFromMontereyPark}`,
+    quoteZone.zoneNumber && `Automatic quote zone: Zone ${quoteZone.zoneNumber}${quoteZone.needsReview ? " (near a zone boundary; review recommended)" : ""}`,
     candidate.aerialUrl && "Aerial preview: LA County 2023 imagery with address labels",
     research.contextMapUrl && "LA context map: Google Maps road map centered on the property",
     "Review duplexes, apartments, suites, and unusual sub-addresses manually even when ZIMAS returns one parcel."
@@ -769,6 +775,11 @@ function buildUpdateFields(research, existingFields) {
     ? buildZimasPublicUrl(zimas.parcel.pin, candidate.fullAddress || research.address)
     : "";
   const assessor = research.countyAssessor;
+  const quoteZone = resolveQuoteZone({
+    quoteZone: existingFields["Quote Zone"],
+    milesFromNorthHollywood: research.milesFromNorthHollywood,
+    milesFromMontereyPark: research.milesFromMontereyPark
+  });
   const publicDataUrl = (assessor && assessor.publicUrl)
     || zimasPublicUrl
     || buildGoogleMapsSearchUrl(candidate.fullAddress || research.address);
@@ -789,6 +800,7 @@ function buildUpdateFields(research, existingFields) {
     "Neighborhood / LA Area": candidate.area,
     "Miles From North Hollywood": research.milesFromNorthHollywood,
     "Miles From Monterey Park": research.milesFromMontereyPark,
+    ...(quoteZone.zoneNumber ? { "Quote Zone": `Zone ${quoteZone.zoneNumber}` } : {}),
     "Verified Sq Ft": assessor && assessor.buildingSqFt ? assessor.buildingSqFt : null,
     "Sq Ft Source": assessor && assessor.buildingSqFt
       ? assessor.matchMethod === "nearby parcel address match"

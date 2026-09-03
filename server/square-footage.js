@@ -28,7 +28,7 @@ function resolveSquareFootage(input = {}) {
 
   return {
     value: null,
-    label: "Blocked — building size must be verified",
+    label: "Manual size confirmation needed",
     source: "No building square footage found; lot size was not used",
     verified: false,
     canAutoQuote: false
