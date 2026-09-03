@@ -23,12 +23,13 @@ disabled as part of the preparatory work.
    creating events or changing Airtable.
 9. Provisional hold create/release endpoints are implemented but remain
    disabled behind `ENABLE_PROVISIONAL_HOLDS=false` pending review.
-10. Appointment proposal flow is implemented but remains feature-flagged behind
-   `ENABLE_APPOINTMENT_PROPOSALS=false`. Anna can review fresh worker
+10. Appointment proposal flow is implemented for test-only use with
+   `ENABLE_APPOINTMENT_PROPOSALS=true`. Anna can review fresh worker
    availability at `/api/scheduling/proposal/start`, send a signed, expiring
    client options link, and receive a re-checked client selection. Selection
-   logging is duplicate-safe; calendar holds remain disabled until explicitly
-   enabled.
+   logging is duplicate-safe; automatic inclusion in approved client quotes
+   remains disabled with `ENABLE_CLIENT_QUOTE_SCHEDULING=false`, and calendar
+   holds remain disabled until explicitly enabled.
 
 ## Execution order
 
