@@ -1,7 +1,8 @@
 const http = require("node:http");
-const { discoverCalendars } = require("./icloud");
+const { discoverCalendars, getCalendarAvailability } = require("./icloud");
 const { buildRoster } = require("./calendar-roster");
-const { schedulingPolicy } = require("./scheduling-policy");
+const { appointmentDurationMinutes, schedulingPolicy } = require("./scheduling-policy");
+const { planAppointments } = require("./appointment-planner");
 const { isSmtpConfigured, sendMail, verifySmtp } = require("./mail");
 const { clientQuoteEmail, quoteReadyEmail } = require("./email-templates");
 const {
@@ -91,6 +92,38 @@ function localDate() {
     month: "2-digit",
     day: "2-digit"
   }).format(new Date());
+}
+
+async function readJsonBody(req) {
+  let body = "";
+  for await (const chunk of req) {
+    body += chunk;
+    if (body.length > 1024 * 1024) throw new Error("Request body is too large");
+  }
+  if (!body.trim()) return {};
+  try {
+    return JSON.parse(body);
+  } catch (error) {
+    throw new Error("Request body must be valid JSON");
+  }
+}
+
+async function workerAvailability({ startDate, days, durationMinutes }) {
+  const discovered = await discoverCalendars({
+    email: clean(process.env.ICLOUD_EMAIL),
+    password: clean(process.env.ICLOUD_APP_PASSWORD)
+  });
+  const roster = buildRoster(discovered.calendars);
+  const availability = await getCalendarAvailability({
+    email: clean(process.env.ICLOUD_EMAIL),
+    password: clean(process.env.ICLOUD_APP_PASSWORD),
+    calendars: roster.workers,
+    startDate,
+    days,
+    durationMinutes,
+    appointmentStarts: schedulingPolicy().appointmentStarts
+  });
+  return { ...availability, calendarHomeUrl: discovered.calendarHomeUrl, roster };
 }
 
 async function deliverQuoteReady(recordId) {
@@ -334,6 +367,54 @@ async function route(req, res) {
   if (req.method === "GET" && url.pathname === "/api/icloud/scheduling-policy") {
     if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
     return json(res, 200, { readOnly: true, ...schedulingPolicy() });
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/icloud/availability") {
+    if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+    try {
+      const squareFeet = Number(url.searchParams.get("squareFeet"));
+      const durationMinutes = Number.isFinite(squareFeet) && squareFeet > 0
+        ? appointmentDurationMinutes(squareFeet)
+        : schedulingPolicy().defaultAppointmentMinutes;
+      const days = Math.min(14, Math.max(1, Number(url.searchParams.get("days")) || 7));
+      const result = await workerAvailability({
+        startDate: clean(url.searchParams.get("startDate")) || localDate(),
+        days,
+        durationMinutes
+      });
+      return json(res, 200, result);
+    } catch (error) {
+      return json(res, 502, { error: "iCloud availability query failed", detail: error.message });
+    }
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/icloud/appointments/dry-run") {
+    if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+    try {
+      const requestBody = await readJsonBody(req);
+      const squareFeet = Number(requestBody.squareFeet);
+      const durationMinutes = appointmentDurationMinutes(squareFeet);
+      if (!durationMinutes) return json(res, 400, { error: "squareFeet must be a positive number" });
+      const days = Math.min(14, Math.max(1, Number(requestBody.days) || 7));
+      const availability = await workerAvailability({
+        startDate: clean(requestBody.startDate) || localDate(),
+        days,
+        durationMinutes
+      });
+      const plan = planAppointments({
+        availability,
+        squareFeet,
+        service: requestBody.service,
+        nearbyToSarah: requestBody.nearbyToSarah === true,
+        milesFromSarah: requestBody.milesFromSarah,
+        bookedThisWeek: requestBody.bookedThisWeek,
+        bookedToday: requestBody.bookedToday,
+        count: requestBody.count
+      });
+      return json(res, 200, { ...plan, availability: { startDate: availability.startDate, days: availability.days } });
+    } catch (error) {
+      return json(res, 502, { error: "Dry-run appointment planning failed", detail: error.message });
+    }
   }
 
   if (req.method === "GET" && url.pathname === "/api/email/verify") {

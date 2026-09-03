@@ -43,6 +43,19 @@ disabled as part of the preparatory work.
    corresponding Airtable email automations one at a time. Keep Airtable as the
    dashboard/source of truth and retain the rollback path.
 
+## Future customer-agent phase
+
+After the Render migration is stable, add a website conversation agent with a
+seamless web-to-text handoff. A visitor can start a quote or scheduling
+conversation on FloorPlanDrawings.com, choose **Text me this conversation**,
+explicitly opt in to SMS, and continue later from the same conversation ID.
+The handoff must preserve the conversation summary, property research, quote
+state, and pending actions. The agent can send routine client updates and
+employee/Anna notifications, while escalating pricing exceptions, unusual
+properties, cancellations, and capacity conflicts for human approval. SMS
+delivery must include consent, STOP handling, delivery-status logging, retries,
+and a secure link back to the website for uploads or quote review.
+
 ## Current scheduling defaults
 
 - Appointment starts: 11:00 AM and 1:00 PM.
