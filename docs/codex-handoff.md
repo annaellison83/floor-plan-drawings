@@ -6,18 +6,21 @@ Updated: 2026-09-03
 
 - Repository: `annaellison83/floor-plan-drawings`
 - Branch: `main`
-- Latest synced commit: `df9653d` (`polish appointment option times`)
+- Latest synced commit: `3fdd1a2` (`add read-only client quote preview`)
 - Netlify website and functions remain live. Airtable remains the dashboard/source of truth. Render now sends the migrated QUOTE READY and approved-client quote emails.
 - Render service: `floorplan-drawings-backend` at `https://floor-plan-drawings.onrender.com`
 - Render settings: `npm install --prefix server`; `node server/index.js`; health path `/healthz`; Starter plan; auto-deploy from `main` enabled.
-- Render health is passing with Airtable, Gmail SMTP, and iCloud integrations enabled.
+- Render health is passing with Airtable, Gmail SMTP, and iCloud integrations enabled. Gmail SMTP is the primary sender and the configured alternate SMTP path is available for bounded fallback delivery.
 - Protected read-only iCloud discovery and roster endpoints are live. The roster classifies `anna` as owner, `corrie`, `sarah`, and `ricardo` as workers, and excludes `Home` and `Reminders`.
 - Read-only worker availability is live at `/api/icloud/availability`; the dry-run planner is live at `/api/icloud/appointments/dry-run`.
-- Appointment proposals are now feature-enabled on Render. Anna can open the
-  signed review link from a QUOTE READY email, inspect fresh worker/time
-  recommendations, and send the client an expiring selection link. Approved
-  client quote emails also include the available-time link when a verified
-  square-footage estimate is present.
+- The internal appointment-proposal board is available for test-only use. Anna
+  can open the signed review link from a QUOTE READY email, inspect fresh
+  worker/time recommendations, and send an expiring selection link. The board
+  does not create calendar events. Approved client quote emails do not include
+  scheduling automatically yet (`ENABLE_CLIENT_QUOTE_SCHEDULING=false`).
+- Current Render migration flags: NEW REQUEST, PROPERTY REVIEW, and FOLLOW-UP
+  are in shadow mode; QUOTE READY and approved CLIENT QUOTE remain live on
+  Render; provisional holds and client scheduling remain disabled.
 - Provisional hold create/release endpoints are staged behind `ENABLE_PROVISIONAL_HOLDS=false`; no event writes have been enabled.
 - No calendar events were created or modified.
 
@@ -35,6 +38,12 @@ Current resilience gap: the fallback Airtable QUOTE READY automation is disabled
 
 - Gmail connector installed locally, but Google authentication is incomplete. Render Gmail SMTP is configured separately; do not request or paste the Gmail password or tokens into chat.
 - Airtable CLI authentication is verified with a PAT restricted to the Floor Plan Drawings Command Center base. The automation audit is recorded in `docs/airtable-automation-migration.md`.
+- Airtable's Codex connector is now connected to the `Floor Plan Drawings
+  Command Center` base (`appBq1xl0G5vCegAH`) in read-only audit mode. The
+  latest inventory contains 56 Jobs records and 8 Communication Log records.
+  Render's candidate rules currently find 0 NEW REQUEST, 0 PROPERTY REVIEW,
+  and 15 historical FOLLOW-UP rows (the latter are seeded 2024 records and
+  should be reviewed before any cutover).
 - Netlify CLI authentication is verified as Anna on the `FPD` team, and this checkout is linked to the existing `floorplandrawings` site. Production deploys are Git-triggered.
 - The Airtable and Netlify Codex plugins are installed. Their in-app OAuth connectors are separate from the verified CLI sessions.
 
