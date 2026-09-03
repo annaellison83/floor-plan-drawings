@@ -23,6 +23,12 @@ disabled as part of the preparatory work.
    creating events or changing Airtable.
 9. Provisional hold create/release endpoints are implemented but remain
    disabled behind `ENABLE_PROVISIONAL_HOLDS=false` pending review.
+10. Appointment proposal flow is implemented but remains feature-flagged behind
+   `ENABLE_APPOINTMENT_PROPOSALS=false`. Anna can review fresh worker
+   availability at `/api/scheduling/proposal/start`, send a signed, expiring
+   client options link, and receive a re-checked client selection. Selection
+   logging is duplicate-safe; calendar holds remain disabled until explicitly
+   enabled.
 
 ## Execution order
 
@@ -37,15 +43,20 @@ disabled as part of the preparatory work.
    uses a unique job/slot key, and includes a protected release path.
 4. **Confirmed events.** Add the confirmation path, duplicate protection, and
    Airtable communication logging. Never write to Home or Reminders.
-5. **Operational email parity.** Move follow-ups, reminders, client
+5. **Appointment proposals.** Add a separate Anna action for “Check
+   availability & send options.” Render should propose several policy-compliant
+   employee/time combinations, let the client choose through a signed link,
+   re-check availability, and only then create a provisional hold. Quote
+   approval and appointment selection remain separate actions.
+6. **Operational email parity.** Move follow-ups, reminders, client
    confirmations, and communication logging to Render using the same guarded
    sender and an explicit retry/failure record.
-6. **Delivery resilience.** Add an alert path for failed sends and a carefully
+7. **Delivery resilience.** Add an alert path for failed sends and a carefully
    bounded fallback provider. Do not retry an ambiguous SMTP result blindly.
-7. **Shadow run.** Leave Airtable automations on, compare Render decisions and
+8. **Shadow run.** Leave Airtable automations on, compare Render decisions and
    delivery logs against Airtable for a representative set of jobs, and send
    controlled test messages.
-8. **Cutover.** Only after shadow-run success and Anna's approval, pause the
+9. **Cutover.** Only after shadow-run success and Anna's approval, pause the
    corresponding Airtable email automations one at a time. Keep Airtable as the
    dashboard/source of truth and retain the rollback path.
 

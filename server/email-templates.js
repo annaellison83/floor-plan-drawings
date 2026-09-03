@@ -74,6 +74,7 @@ function quoteReadyEmail(job) {
     || `https://www.google.com/maps/search/?api=1&amp;query=${encodeURIComponent(address)}`;
   const recordUrl = safeUrl(job.recordUrl);
   const approvalUrl = safeUrl(job.approvalUrl);
+  const availabilityReviewUrl = safeUrl(job.availabilityReviewUrl);
   const mapUrl = safeUrl(job.mapUrl);
   const contextMapUrl = safeUrl(job.contextMapUrl);
   const subject = `QUOTE READY | ${address}`;
@@ -95,14 +96,18 @@ body{margin:0!important;padding:0!important;background:#f3f1eb;color:#22332e;fon
     `Suggested quote: ${money(pricing.finalPrice)}`,
     pricing.zoneMinimum && `Pricing rule: base ${money(pricing.basePrice)}; Zone ${pricing.zoneNumber} minimum ${money(pricing.zoneMinimum)}; the higher amount wins.`,
     job.quoteNotes && `Pricing review: ${job.quoteNotes}`,
+    availabilityReviewUrl && `Check availability and send appointment options: ${availabilityReviewUrl}`,
     approvalUrl && `Review and approve: ${approvalUrl}`,
     recordUrl && `Airtable record: ${recordUrl}`
   ].filter(Boolean).join("\n\n");
 
-  return { subject, html, text: plainText };
+  const renderedHtml = availabilityReviewUrl
+    ? html.replace("</body>", `<div style="max-width:1100px;margin:0 auto 24px;text-align:center;font-family:Arial,Helvetica,sans-serif;"><a class="button" href="${escapeHtml(availabilityReviewUrl)}">Check availability &amp; send options</a></div></body>`)
+    : html;
+  return { subject, html: renderedHtml, text: plainText };
 }
 
-function clientQuoteEmail(job) {
+function clientQuoteEmail(job, proposalUrl = "", slots = []) {
   const name = text(job.clientName, "there");
   const address = text(job.propertyAddress);
   const service = text(job.service, "Floor plan drawing");
@@ -110,7 +115,31 @@ function clientQuoteEmail(job) {
   const quote = money(job.finalQuote);
   const subject = `Your floor plan quote - ${address}`;
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0;padding:0;background:#f3f1eb;color:#22332e;font-family:Arial,Helvetica,sans-serif;"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f3f1eb;"><tr><td style="padding:24px 12px;"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:680px;margin:0 auto;background:#fbf8f1;border:1px solid #ddd7ca;border-radius:18px;"><tr><td style="padding:38px 32px;"><div style="color:#53635c;font-size:12px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;">FloorPlanDrawings</div><h1 style="margin:14px 0 18px;font-size:30px;line-height:38px;color:#173f36;">Your floor plan quote</h1><p style="font-size:16px;line-height:25px;margin:0 0 20px;">Hi ${escapeHtml(name)},</p><p style="font-size:16px;line-height:25px;margin:0 0 22px;">Thanks for reaching out to FloorPlanDrawings. Anna reviewed your request and approved the following quote.</p><div style="background:#b8c9ae;border-radius:14px;padding:24px;"><div style="font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#53635c;">Property</div><div style="margin-top:8px;font-size:22px;line-height:30px;font-weight:700;">${escapeHtml(address)}</div><div style="margin-top:16px;font-size:15px;line-height:24px;"><strong>Service:</strong> ${escapeHtml(service)}<br><strong>Scope:</strong> ${escapeHtml(scope)}</div><div style="margin-top:20px;font-size:34px;line-height:40px;font-weight:700;color:#173f36;">${escapeHtml(quote)}</div></div><p style="font-size:16px;line-height:25px;margin:24px 0 0;">If you would like to move forward, reply to this email with your preferred appointment day/time and access details. We will confirm the appointment after we hear back.</p><p style="font-size:16px;line-height:25px;margin:24px 0 0;">Thank you,<br>FloorPlanDrawings</p></td></tr></table></td></tr></table></body></html>`;
-  const plainText = [`Hi ${name},`, "Thanks for reaching out to FloorPlanDrawings. Anna reviewed your request and approved the following quote.", `Property: ${address}`, `Service: ${service}`, `Scope: ${scope}`, `Quote: ${quote}`, "If you would like to move forward, reply to this email with your preferred appointment day/time and access details. We will confirm the appointment after we hear back.", "Thank you,\nFloorPlanDrawings"].join("\n\n");
+  const options = (Array.isArray(slots) ? slots : []).slice(0, 5);
+  const appointmentPanel = proposalUrl ? `<div style="margin-top:24px;padding:20px;background:#e3eadf;border-radius:14px;"><div style="font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#53635c;">Appointment options</div><p style="font-size:16px;line-height:25px;margin:10px 0 14px;color:#394842;">Choose a preferred time and we will re-check availability before confirming it.</p>${options.map((slot, index) => `<div style="padding:10px 0;border-top:1px solid #cbd7c5;font-size:15px;line-height:23px;color:#394842;"><strong>Option ${index + 1}:</strong> ${escapeHtml(formatSlot(slot))}</div>`).join("")}<div style="text-align:center;margin-top:16px;"><a href="${escapeHtml(proposalUrl)}" style="display:inline-block;background:#173f36;color:#fff!important;text-decoration:none;border-radius:9px;padding:14px 22px;font-size:16px;line-height:21px;font-weight:700;">Choose an appointment time</a></div></div>` : "";
+  const renderedHtml = proposalUrl ? html.replace("</body>", `${appointmentPanel}</body>`) : html;
+  const plainText = [`Hi ${name},`, "Thanks for reaching out to FloorPlanDrawings. Anna reviewed your request and approved the following quote.", `Property: ${address}`, `Service: ${service}`, `Scope: ${scope}`, `Quote: ${quote}`, options.length && options.map((slot, index) => `Option ${index + 1}: ${formatSlot(slot)}`).join("\n"), proposalUrl && `Choose an appointment time: ${proposalUrl}`, "If you would like to move forward, reply to this email with access details. We will confirm the appointment after we hear back.", "Thank you,\nFloorPlanDrawings"].filter(Boolean).join("\n\n");
+  return { subject, html: renderedHtml, text: plainText };
+}
+
+function formatSlot(slot) {
+  const date = new Date(`${text(slot.date)}T12:00:00`);
+  const dateLabel = Number.isNaN(date.getTime())
+    ? text(slot.date)
+    : date.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+  const duration = slot.durationMinutes ? `${slot.durationMinutes} minutes` : "scheduled visit";
+  return `${dateLabel} at ${text(slot.localStart)} · ${text(slot.worker)} · ${duration}`;
+}
+
+function clientAvailabilityProposalEmail(job, proposalUrl, slots = []) {
+  const name = text(job.clientName, "there");
+  const address = text(job.propertyAddress);
+  const service = text(job.service, "Floor plan drawing");
+  const options = (Array.isArray(slots) ? slots : []).slice(0, 5);
+  const optionRows = options.map((slot, index) => `<tr><td style="padding:15px 16px;border:1px solid #d9d5ca;background:#fff;vertical-align:top;"><div style="font-size:16px;line-height:24px;font-weight:700;color:#173f36;">Option ${index + 1}</div><div style="margin-top:4px;font-size:15px;line-height:23px;color:#394842;">${escapeHtml(formatSlot(slot))}</div><div style="margin-top:4px;font-size:13px;line-height:20px;color:#53635c;">Target delivery: ${escapeHtml(slot.deliveryTarget && slot.deliveryTarget.label || "To be confirmed")}</div></td></tr>`).join("");
+  const subject = `APPOINTMENT OPTIONS | ${address}`;
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;background:#f3f1eb;color:#22332e;font-family:Arial,Helvetica,sans-serif}.shell{width:100%;background:#f3f1eb}.canvas{width:calc(100% - 32px);max-width:760px;margin:0 auto}.card{margin:24px auto;background:#fbf8f1;border:1px solid #ddd7ca;border-radius:18px}.pad{padding:34px}.eyebrow{color:#53635c;font-size:12px;line-height:17px;font-weight:700;letter-spacing:.15em;text-transform:uppercase}.title{margin:12px 0 14px;font-size:31px;line-height:39px;color:#173f36}.copy{font-size:16px;line-height:25px;color:#394842}.property{margin:22px 0;padding:20px;background:#b8c9ae;border-radius:14px;font-size:18px;line-height:26px;font-weight:700}.options{width:100%;border-collapse:separate;border-spacing:0 10px}.button-wrap{text-align:center;padding:25px 0 10px}.button{display:inline-block;background:#173f36;color:#fff!important;text-decoration:none;border-radius:10px;padding:16px 26px;font-size:16px;line-height:21px;font-weight:700}.fine{font-size:13px;line-height:20px;color:#6b7067}@media only screen and (max-width:640px){.canvas{width:100%!important}.card{margin:8px 0;border-radius:12px}.pad{padding:23px 16px!important}.title{font-size:27px;line-height:34px}.property{padding:17px;font-size:16px;line-height:23px}.button{display:block;text-align:center}.options td{padding:13px!important}}</style></head><body><table role="presentation" class="shell" width="100%" cellspacing="0" cellpadding="0"><tr><td><table role="presentation" class="canvas" width="100%" cellspacing="0" cellpadding="0"><tr><td class="card"><div class="pad"><div class="eyebrow">FloorPlanDrawings / scheduling</div><h1 class="title">Choose an appointment time</h1><p class="copy">Hi ${escapeHtml(name)},</p><p class="copy">Anna reviewed your ${escapeHtml(service)} request. These appointment options are currently available for the property below.</p><div class="property">${escapeHtml(address)}</div><table role="presentation" class="options" width="100%" cellspacing="0" cellpadding="0">${optionRows}</table>${proposalUrl ? `<div class="button-wrap"><a class="button" href="${escapeHtml(proposalUrl)}">Review and choose a time</a></div>` : ""}<p class="fine">Selecting a time requests that slot; we will re-check availability and confirm it before the appointment is final. These options expire automatically.</p><p class="copy">Thank you,<br>FloorPlanDrawings</p></div></td></tr></table></td></tr></table></body></html>`;
+  const plainText = [`APPOINTMENT OPTIONS`, `Hi ${name},`, `Anna reviewed your ${service} request.`, `Property: ${address}`, options.map((slot, index) => `Option ${index + 1}: ${formatSlot(slot)} · Target delivery: ${slot.deliveryTarget && slot.deliveryTarget.label || "To be confirmed"}`).join("\n"), proposalUrl && `Review and choose a time: ${proposalUrl}`, "Selecting a time requests that slot; we will re-check availability and confirm it before the appointment is final."].filter(Boolean).join("\n\n");
   return { subject, html, text: plainText };
 }
 
@@ -148,6 +177,7 @@ function followUpEmail(jobs, dateLabel) {
 }
 
 module.exports = {
+  clientAvailabilityProposalEmail,
   clientQuoteEmail,
   escapeHtml,
   followUpEmail,

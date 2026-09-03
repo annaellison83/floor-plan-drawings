@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { clientQuoteEmail, quotePricing, quoteReadyEmail } = require("./email-templates");
+const { clientAvailabilityProposalEmail, clientQuoteEmail, quotePricing, quoteReadyEmail } = require("./email-templates");
 
 test("quote ready template escapes all dynamic HTML", () => {
   const rendered = quoteReadyEmail({
@@ -34,6 +34,43 @@ test("client quote email contains one approved amount and escapes client data", 
   assert.match(email.text, /Quote: \$365/);
 });
 
+test("approved client quote can include appointment options", () => {
+  const email = clientQuoteEmail({
+    clientName: "Eric",
+    propertyAddress: "123 Main St",
+    service: "Color Interior + Exterior",
+    finalQuote: 365
+  }, "https://floor-plan-drawings.onrender.com/api/scheduling/proposal?token=abc", [{
+    date: "2026-09-07",
+    localStart: "11:00 AM",
+    worker: "corrie",
+    durationMinutes: 90
+  }]);
+  assert.match(email.html, /Appointment options/);
+  assert.match(email.html, /Choose an appointment time/);
+  assert.match(email.text, /Option 1/);
+});
+
+test("appointment proposal email presents responsive selectable options", () => {
+  const email = clientAvailabilityProposalEmail({
+    clientName: "Eric",
+    clientEmail: "eric@example.com",
+    propertyAddress: "123 Main St",
+    service: "Color Interior + Exterior"
+  }, "https://floor-plan-drawings.onrender.com/api/scheduling/proposal?token=abc", [{
+    date: "2026-09-07",
+    localStart: "11:00 AM",
+    worker: "corrie",
+    durationMinutes: 90,
+    deliveryTarget: { label: "Friday" }
+  }]);
+  assert.equal(email.subject, "APPOINTMENT OPTIONS | 123 Main St");
+  assert.match(email.html, /Choose an appointment time/);
+  assert.match(email.html, /Review and choose a time/);
+  assert.match(email.html, /@media only screen and \(max-width:640px\)/);
+  assert.match(email.text, /Option 1/);
+});
+
 test("quote ready template is wide on desktop and stacks on mobile", () => {
   const { html } = quoteReadyEmail({
     propertyAddress: "349 Mount Washington Dr",
@@ -51,6 +88,16 @@ test("quote ready template is wide on desktop and stacks on mobile", () => {
   assert.match(html, /color:#0b57d0/);
   assert.doesNotMatch(html, /class="badge"/);
   assert.match(html, /class="eyebrow section-title">QUOTE READY/);
+});
+
+test("quote ready email exposes the separate availability proposal action", () => {
+  const { html, text } = quoteReadyEmail({
+    propertyAddress: "123 Main St",
+    suggestedQuote: 345,
+    availabilityReviewUrl: "https://floor-plan-drawings.onrender.com/api/scheduling/proposal/start?recordId=rec123&token=abc"
+  });
+  assert.match(html, /Check availability &amp; send options/);
+  assert.match(text, /Check availability and send appointment options/);
 });
 
 test("zone pricing uses the minimum as a floor, not an add-on", () => {

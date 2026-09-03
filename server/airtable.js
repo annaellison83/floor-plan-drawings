@@ -22,7 +22,9 @@ function mapJob(record, options = {}) {
   const baseId = clean(options.baseId);
   const tableId = clean(options.tableId);
   const approvalBaseUrl = clean(options.approvalBaseUrl);
+  const proposalReviewBaseUrl = clean(options.proposalReviewBaseUrl);
   const approvalToken = clean(first(fields, ["Quote Approval Token", "Approval Token"]));
+  const verifiedSqFt = Number(first(fields, ["Verified Sq Ft", "Verified Square Feet"]));
 
   return {
     recordId: clean(record && record.id),
@@ -56,6 +58,9 @@ function mapJob(record, options = {}) {
       : "",
     approvalUrl: approvalBaseUrl && approvalToken && record.id
       ? `${approvalBaseUrl}${approvalBaseUrl.includes("?") ? "&" : "?"}recordId=${encodeURIComponent(record.id)}&token=${encodeURIComponent(approvalToken)}`
+      : "",
+    availabilityReviewUrl: proposalReviewBaseUrl && approvalToken && record.id && Number.isFinite(verifiedSqFt) && verifiedSqFt > 0
+      ? `${proposalReviewBaseUrl}${proposalReviewBaseUrl.includes("?") ? "&" : "?"}recordId=${encodeURIComponent(record.id)}&token=${encodeURIComponent(approvalToken)}`
       : ""
   };
 }
@@ -67,7 +72,8 @@ function config(env = process.env) {
     jobsTable: clean(env.AIRTABLE_JOBS_TABLE) || "Jobs",
     jobsTableId: clean(env.AIRTABLE_JOBS_TABLE_ID),
     communicationLogTable: clean(env.AIRTABLE_COMMUNICATION_LOG_TABLE) || "Communication Log",
-    approvalBaseUrl: clean(env.QUOTE_APPROVAL_URL)
+    approvalBaseUrl: clean(env.QUOTE_APPROVAL_URL),
+    proposalReviewBaseUrl: clean(env.PROPOSAL_REVIEW_BASE_URL) || "https://floor-plan-drawings.onrender.com/api/scheduling/proposal/start"
   };
 }
 
@@ -116,6 +122,17 @@ function notificationLogFields({ recordId, eventType, subject, status = "Pending
   };
 }
 
+function appointmentProposalLogFields({ recordId, subject, status = "Pending", summary = "", communication }) {
+  return notificationLogFields({
+    recordId,
+    eventType: "APPOINTMENT OPTIONS",
+    subject,
+    status,
+    summary,
+    communication: communication || communicationKey(recordId, "appointment_options")
+  });
+}
+
 async function airtableJson(url, { token, method = "GET", body } = {}) {
   const response = await fetch(url, {
     method,
@@ -147,8 +164,26 @@ async function getJob(recordId, options = {}) {
   return mapJob(body, {
     baseId: settings.baseId,
     tableId: settings.jobsTableId || settings.jobsTable,
-    approvalBaseUrl: settings.approvalBaseUrl
+    approvalBaseUrl: settings.approvalBaseUrl,
+    proposalReviewBaseUrl: settings.proposalReviewBaseUrl
   });
+}
+
+async function getApprovalState(recordId, options = {}) {
+  const settings = { ...config(), ...options };
+  const id = clean(recordId);
+  if (!settings.token || !settings.baseId) throw new Error("Airtable is not configured");
+  if (!id || !/^rec[a-zA-Z0-9]+$/.test(id)) throw new Error("A valid Airtable record ID is required");
+  const table = settings.jobsTableId || settings.jobsTable;
+  const url = `${AIRTABLE_API}/${encodeURIComponent(settings.baseId)}/${encodeURIComponent(table)}/${encodeURIComponent(id)}`;
+  const body = await airtableJson(url, { token: settings.token });
+  const fields = body.fields || {};
+  return {
+    approvalToken: clean(first(fields, ["Quote Approval Token", "Approval Token"])),
+    decision: clean(fields["Anna Decision"]),
+    workflow: clean(first(fields, ["Website Workflow", "Workflow", "Request Type"])),
+    address: first(fields, ["Property Address", "Address"])
+  };
 }
 
 async function findQuoteReadyDeliveries(recordId, options = {}) {
@@ -206,6 +241,10 @@ async function findNotificationDeliveries(recordId, eventType, options = {}) {
   url.searchParams.append("fields[]", "Delivery Status");
   const body = await airtableJson(url.href, { token: settings.token });
   return body.records || [];
+}
+
+async function findAppointmentProposalDeliveries(recordId, options = {}) {
+  return findNotificationDeliveries(recordId, "APPOINTMENT OPTIONS", options);
 }
 
 async function listApprovedQuoteCandidates(options = {}) {
@@ -286,6 +325,17 @@ async function createNotificationLog(input, options = {}) {
   });
 }
 
+async function createAppointmentProposalLog(input, options = {}) {
+  const settings = { ...config(), ...options };
+  if (!settings.token || !settings.baseId) throw new Error("Airtable is not configured");
+  const url = `${AIRTABLE_API}/${encodeURIComponent(settings.baseId)}/${encodeURIComponent(settings.communicationLogTable)}`;
+  return airtableJson(url, {
+    token: settings.token,
+    method: "POST",
+    body: { records: [{ fields: appointmentProposalLogFields(input) }], typecast: false }
+  });
+}
+
 async function updateCommunicationLog(recordId, fields, options = {}) {
   const settings = { ...config(), ...options };
   const id = clean(recordId);
@@ -314,16 +364,20 @@ async function updateJob(recordId, fields, options = {}) {
 }
 
 module.exports = {
+  appointmentProposalLogFields,
   clientQuoteLogFields,
   communicationKey,
   config,
   createClientQuoteLog,
+  createAppointmentProposalLog,
   createQuoteReadyLog,
   createNotificationLog,
   findClientQuoteDeliveries,
+  findAppointmentProposalDeliveries,
   findQuoteReadyDeliveries,
   findNotificationDeliveries,
   getJob,
+  getApprovalState,
   listApprovedQuoteCandidates,
   listFollowUpCandidates,
   listNewRequestCandidates,

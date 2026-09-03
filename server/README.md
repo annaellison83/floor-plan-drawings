@@ -49,6 +49,22 @@ with JSON such as `{ "squareFeet": 2400, "service": "Black & White" }`. It
 returns policy-compliant worker/slot recommendations and delivery targets. It
 is read-only and does not change Airtable or iCloud.
 
+## Appointment proposals
+
+The protected preview endpoint is:
+
+`GET /api/airtable/availability-proposal/preview?recordId=rec...`
+
+It reads the verified square footage and current worker calendars, then returns
+policy-compliant options without sending email or writing an event. Anna's
+quote-ready email includes a review link at `/api/scheduling/proposal/start`.
+That page lets her inspect the fresh options and send the client an expiring,
+signed selection link. A client selection is re-checked against iCloud before
+it is logged. With `ENABLE_PROVISIONAL_HOLDS=false`, no calendar event is
+created; the selection is logged for Anna to confirm manually. Enabling the
+flag adds the existing deterministic provisional hold, still requiring a later
+confirmation step before a final event is created.
+
 Provisional holds are staged behind `ENABLE_PROVISIONAL_HOLDS=false`. When
 explicitly enabled, `POST /api/icloud/appointments/hold` creates a deterministic
 tentative event only on a roster worker calendar. The request must include a

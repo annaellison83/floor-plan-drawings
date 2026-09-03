@@ -9,9 +9,11 @@ const {
 const { buildRoster } = require("./calendar-roster");
 const { appointmentDurationMinutes, schedulingPolicy } = require("./scheduling-policy");
 const { planAppointments } = require("./appointment-planner");
+const { proposalPayload, signProposal, verifyProposal } = require("./appointment-proposals");
 const { isSmtpConfigured, sendMail, verifySmtp } = require("./mail");
 const {
   clientQuoteEmail,
+  clientAvailabilityProposalEmail,
   followUpEmail,
   newRequestEmail,
   propertyReviewEmail,
@@ -19,11 +21,14 @@ const {
 } = require("./email-templates");
 const {
   createClientQuoteLog,
+  createAppointmentProposalLog,
   createNotificationLog,
   createQuoteReadyLog,
   findClientQuoteDeliveries,
+  findAppointmentProposalDeliveries,
   findNotificationDeliveries,
   findQuoteReadyDeliveries,
+  getApprovalState,
   getJob,
   listApprovedQuoteCandidates,
   listFollowUpCandidates,
@@ -100,7 +105,9 @@ function integrationStatus() {
     provisionalHoldsEnabled: provisionalHoldEnabled(),
     newRequestSendEnabled: newRequestEnabled(),
     propertyReviewSendEnabled: propertyReviewEnabled(),
-    followUpSendEnabled: followUpEnabled()
+    followUpSendEnabled: followUpEnabled(),
+    appointmentProposalSendEnabled: appointmentProposalEnabled(),
+    appointmentProposalHoldEnabled: provisionalHoldEnabled()
   };
 }
 
@@ -122,6 +129,10 @@ function propertyReviewEnabled() {
 
 function followUpEnabled() {
   return clean(process.env.ENABLE_FOLLOW_UP_SENDS).toLowerCase() === "true";
+}
+
+function appointmentProposalEnabled() {
+  return clean(process.env.ENABLE_APPOINTMENT_PROPOSALS).toLowerCase() === "true";
 }
 
 function provisionalHoldEnabled() {
@@ -173,6 +184,9 @@ async function readJsonBody(req) {
     if (body.length > 1024 * 1024) throw new Error("Request body is too large");
   }
   if (!body.trim()) return {};
+  if (String(req.headers["content-type"] || "").includes("application/x-www-form-urlencoded")) {
+    return Object.fromEntries(new URLSearchParams(body));
+  }
   try {
     return JSON.parse(body);
   } catch (error) {
@@ -196,6 +210,150 @@ async function workerAvailability({ startDate, days, durationMinutes }) {
     appointmentStarts: schedulingPolicy().appointmentStarts
   });
   return { ...availability, calendarHomeUrl: discovered.calendarHomeUrl, roster };
+}
+
+function appointmentProposalBaseUrl() {
+  return clean(process.env.PROPOSAL_PUBLIC_BASE_URL) || "https://floor-plan-drawings.onrender.com/api/scheduling/proposal";
+}
+
+function escapeHtml(value) {
+  return clean(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;");
+}
+
+function formatProposalSlot(slot) {
+  const date = new Date(`${clean(slot.date)}T12:00:00`);
+  const dateLabel = Number.isNaN(date.getTime()) ? clean(slot.date) : date.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+  return `${dateLabel} at ${clean(slot.localStart)} · ${clean(slot.worker)} · ${Number(slot.durationMinutes) || 0} minutes`;
+}
+
+async function buildAppointmentProposal(recordId, input = {}) {
+  const job = await getJob(recordId);
+  const squareFeet = Number(job.verifiedSqFt);
+  if (!Number.isFinite(squareFeet) || squareFeet <= 0) throw new Error("Verified square footage is required before proposing appointment times");
+  const days = Math.min(14, Math.max(1, Number(input.days) || 7));
+  const availability = await workerAvailability({
+    startDate: clean(input.startDate) || localDate(),
+    days,
+    durationMinutes: appointmentDurationMinutes(squareFeet)
+  });
+  const plan = planAppointments({
+    availability,
+    squareFeet,
+    service: job.service,
+    nearbyToSarah: input.nearbyToSarah === true,
+    milesFromSarah: input.milesFromSarah,
+    bookedThisWeek: input.bookedThisWeek,
+    bookedToday: input.bookedToday,
+    count: Math.min(5, Math.max(1, Number(input.count) || 3))
+  });
+  if (!plan.recommendations.length) throw new Error(plan.unassignedReason || "No available appointment options found");
+  const payload = proposalPayload({
+    recordId: job.recordId,
+    address: job.propertyAddress,
+    clientName: job.clientName,
+    squareFeet,
+    service: job.service,
+    slots: plan.recommendations
+  });
+  return { job, plan, payload };
+}
+
+function proposalPage(payload, token, notice = "", actionUrl = appointmentProposalBaseUrl(), submitLabel = "Request this time") {
+  const options = payload.slots.map((slot, index) => `<label style="display:block;margin:12px 0;padding:16px;border:1px solid #d9d5ca;border-radius:10px;background:#fff;cursor:pointer;"><input type="radio" name="slot" value="${index}"${index === 0 ? " checked" : ""} style="margin-right:10px;"><strong>Option ${index + 1}</strong><br><span style="display:inline-block;margin:6px 0 0 24px;color:#394842;">${escapeHtml(formatProposalSlot(slot))}<br>Target delivery: ${escapeHtml(slot.deliveryTarget && slot.deliveryTarget.label || "To be confirmed")}</span></label>`).join("");
+  const noticeHtml = notice ? `<div role="status" style="margin:0 0 18px;padding:13px 15px;background:#E4F1DE;border:1px solid #9FBC91;border-radius:8px;color:#1F3A34;font-weight:bold;">${escapeHtml(notice)}</div>` : "";
+  return `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Choose an appointment | FloorPlanDrawings</title></head><body style="margin:0;background:#F5F1E8;color:#22261F;font-family:Helvetica,Arial,sans-serif;"><main style="max-width:680px;margin:5vh auto;padding:34px 26px;background:#fff;border:1px solid #DCD7C9;border-radius:14px;box-shadow:0 8px 30px rgba(34,38,31,.08);"><div style="font-size:11px;font-weight:bold;letter-spacing:2px;text-transform:uppercase;color:#6B6B5F;">FloorPlanDrawings / scheduling</div><h1 style="font-size:30px;line-height:38px;margin:12px 0 16px;">Choose an appointment time</h1>${noticeHtml}<p style="font-size:16px;line-height:25px;color:#4A4A40;">${escapeHtml(payload.address)}</p><p style="font-size:15px;line-height:24px;color:#4A4A40;">Select one option below. We will re-check the calendar and confirm the appointment before it is final.</p><form method="post" action="${escapeHtml(actionUrl)}"><input type="hidden" name="token" value="${escapeHtml(token)}">${options}<button type="submit" style="border:0;border-radius:8px;background:#1F3A34;color:#F5F1E8;font-size:16px;line-height:22px;font-weight:bold;padding:15px 22px;cursor:pointer;">${escapeHtml(submitLabel)}</button></form><p style="font-size:13px;line-height:20px;color:#8A897C;margin-top:20px;">Options expire automatically.</p></main></body></html>`;
+}
+
+async function sendAvailabilityProposal(recordId, input = {}) {
+  const { job, plan, payload } = await buildAppointmentProposal(recordId, input);
+  if (!job.clientEmail) throw new Error("Client Email is missing");
+  const token = signProposal(payload);
+  const proposalUrl = `${appointmentProposalBaseUrl()}?token=${encodeURIComponent(token)}`;
+  const email = clientAvailabilityProposalEmail(job, proposalUrl, payload.slots);
+  const prior = await findAppointmentProposalDeliveries(recordId);
+  if (prior.length) return { ok: false, status: 409, error: "Appointment proposal already sent", recordId, priorDeliveryRecordIds: prior.map((item) => item.id) };
+  const reservation = await createAppointmentProposalLog({ recordId, subject: email.subject, status: "Pending", summary: `Reserved by Render for ${payload.slots.length} appointment options` });
+  const logRecordId = reservation.records && reservation.records[0] && reservation.records[0].id;
+  if (!logRecordId) throw new Error("Airtable did not return the appointment proposal log ID");
+  try {
+    const delivery = await sendMail({ to: job.clientEmail, replyTo: clean(process.env.SMTP_USER), subject: email.subject, html: email.html, text: email.text });
+    await updateCommunicationLog(logRecordId, { "Delivery Status": "Sent", Summary: `Appointment options sent by Render for ${job.propertyAddress}${delivery.messageId ? `; message ${delivery.messageId}` : ""}` });
+    return { ok: true, status: 200, recordId, logRecordId, proposalUrl, options: plan.recommendations };
+  } catch (error) {
+    await updateCommunicationLog(logRecordId, { "Delivery Status": "Failed", Summary: `Appointment proposal delivery failed: ${error.message}` }).catch(() => {});
+    throw error;
+  }
+}
+
+async function authorizeProposalStart(recordId, providedToken) {
+  const state = await getApprovalState(recordId);
+  if (state.workflow !== "Quick Quote") throw new Error("This link only applies to Quick Quote records");
+  if (!state.approvalToken || !tokensMatch(state.approvalToken, providedToken)) throw new Error("This scheduling link is no longer valid");
+  if (state.decision && state.decision !== "Pending") throw new Error("This quote is no longer pending review");
+  return state;
+}
+
+async function selectAppointment(payload, selectedIndex) {
+  const slot = payload.slots[selectedIndex];
+  if (!slot) throw new Error("Choose one of the listed appointment options");
+  const availability = await workerAvailability({
+    startDate: localDate(),
+    days: 14,
+    durationMinutes: Number(slot.durationMinutes) || schedulingPolicy().defaultAppointmentMinutes
+  });
+  const worker = clean(slot.worker).toLowerCase() === "ricky" ? "ricardo" : clean(slot.worker).toLowerCase();
+  const current = (availability.calendars || [])
+    .filter((calendar) => clean(calendar.name).toLowerCase() === (clean(slot.calendarName).toLowerCase() || worker))
+    .flatMap((calendar) => calendar.slots || [])
+    .find((candidate) => candidate.available && candidate.start === slot.start && candidate.end === slot.end);
+  if (!current) throw new Error("That time is no longer available. Please use the link again for fresh options.");
+
+  const selectionKey = crypto.createHash("sha256").update(`${payload.recordId}|${worker}|${slot.start}`).digest("hex").slice(0, 20);
+  const communication = communicationKey(payload.recordId, "appointment_selection", selectionKey);
+  if ((await findNotificationDeliveries(communication, "APPOINTMENT SELECTION")).length) {
+    throw new Error("That appointment option has already been requested");
+  }
+  const reservation = await createNotificationLog({
+    recordId: payload.recordId,
+    communication,
+    eventType: "APPOINTMENT SELECTION",
+    subject: `Appointment requested | ${payload.address}`,
+    status: "Pending",
+    summary: `Client selected ${formatProposalSlot(slot)}`
+  });
+  const logRecordId = reservation.records && reservation.records[0] && reservation.records[0].id;
+  if (!logRecordId) throw new Error("Airtable did not return the appointment selection log ID");
+
+  if (!provisionalHoldEnabled()) {
+    await updateCommunicationLog(logRecordId, { Summary: `Client requested ${formatProposalSlot(slot)}; Anna confirmation required while calendar holds are disabled` });
+    return { slot, held: false, logRecordId };
+  }
+
+  try {
+    const discovered = await discoverCalendars({ email: clean(process.env.ICLOUD_EMAIL), password: clean(process.env.ICLOUD_APP_PASSWORD) });
+    const calendar = workerCalendar(buildRoster(discovered.calendars), worker);
+    if (!calendar) throw new Error("The selected worker calendar is no longer available");
+    const start = new Date(slot.start);
+    const end = new Date(slot.end);
+    const expiresAt = new Date(Math.min(Date.now() + 24 * 60 * 60 * 1000, Number(payload.expiresAt)));
+    const id = holdId({ jobKey: payload.recordId, worker: calendar.name, start: start.toISOString() });
+    const hold = await createProvisionalHold({
+      calendar,
+      email: clean(process.env.ICLOUD_EMAIL),
+      password: clean(process.env.ICLOUD_APP_PASSWORD),
+      uid: id,
+      start,
+      end,
+      expiresAt,
+      summary: `FloorPlanDrawings provisional hold — ${payload.address}`,
+      description: "Client selected this time; awaiting Anna's confirmation"
+    });
+    await updateCommunicationLog(logRecordId, { "Delivery Status": "Sent", Summary: `Client selected ${formatProposalSlot(slot)}; provisional hold ${hold.duplicate ? "already existed" : "created"}` });
+    return { slot, held: true, duplicate: hold.duplicate, holdId: id, logRecordId };
+  } catch (error) {
+    await updateCommunicationLog(logRecordId, { "Delivery Status": "Failed", Summary: `Appointment hold failed: ${error.message}` }).catch(() => {});
+    throw error;
+  }
 }
 
 async function deliverQuoteReady(recordId) {
@@ -267,7 +425,19 @@ async function deliverClientQuote(recordId) {
     const job = await getJob(recordId);
     if (!job.clientEmail) throw new Error("Client Email is missing");
     if (!Number.isFinite(Number(job.finalQuote)) || Number(job.finalQuote) <= 0) throw new Error("Approved quote amount is missing");
-    const email = clientQuoteEmail(job);
+    let proposalUrl = "";
+    let proposalSlots = [];
+    if (appointmentProposalEnabled()) {
+      try {
+        const built = await buildAppointmentProposal(recordId);
+        const proposalToken = signProposal(built.payload);
+        proposalUrl = `${appointmentProposalBaseUrl()}?token=${encodeURIComponent(proposalToken)}`;
+        proposalSlots = built.payload.slots;
+      } catch (error) {
+        console.warn(`Appointment options unavailable for ${recordId}: ${error.message}`);
+      }
+    }
+    const email = clientQuoteEmail(job, proposalUrl, proposalSlots);
     const reservation = await createClientQuoteLog({
       recordId,
       clientName: job.clientName,
@@ -509,6 +679,45 @@ async function route(req, res) {
     });
   }
 
+  if ((req.method === "GET" || req.method === "POST") && url.pathname === "/api/scheduling/proposal/start") {
+    const recordId = clean(url.searchParams.get("recordId"));
+    const providedToken = clean(url.searchParams.get("token"));
+    if (!/^rec[A-Za-z0-9]{14}$/.test(recordId) || !providedToken) return html(res, 400, proposalPage({ address: "this quote", slots: [] }, "", "This scheduling link is incomplete."));
+    try {
+      await authorizeProposalStart(recordId, providedToken);
+      if (req.method === "GET") {
+        const built = await buildAppointmentProposal(recordId);
+        const proposalToken = signProposal(built.payload);
+        const actionUrl = `${appointmentProposalBaseUrl()}/start?recordId=${encodeURIComponent(recordId)}&token=${encodeURIComponent(providedToken)}`;
+        return html(res, 200, proposalPage(built.payload, proposalToken, "", actionUrl, "Send these options to the client"));
+      }
+      if (!appointmentProposalEnabled()) return html(res, 503, proposalPage({ address: "this quote", slots: [] }, "", "Appointment proposals are not enabled yet. No email or calendar event was created."));
+      const result = await sendAvailabilityProposal(recordId);
+      return html(res, 200, `<!doctype html><html><body style="margin:0;background:#F5F1E8;color:#22261F;font-family:Helvetica,Arial,sans-serif;"><main style="max-width:620px;margin:10vh auto;padding:36px 28px;background:#fff;border:1px solid #DCD7C9;border-radius:14px;"><h1>Appointment options sent</h1><p>The available times were emailed to the client. No calendar event was created.</p></main></body></html>`);
+    } catch (error) {
+      return html(res, 409, proposalPage({ address: "this quote", slots: [] }, "", error.message));
+    }
+  }
+
+  if ((req.method === "GET" || req.method === "POST") && url.pathname === "/api/scheduling/proposal") {
+    const token = clean(url.searchParams.get("token"));
+    const payload = verifyProposal(token);
+    if (!payload) return html(res, 410, proposalPage({ address: "this quote", slots: [] }, "", "This appointment link is invalid or expired."));
+    if (req.method === "GET") return html(res, 200, proposalPage(payload, token));
+    try {
+      const body = await readJsonBody(req);
+      const selectedIndex = Number(body.slot);
+      if (!Number.isInteger(selectedIndex)) return html(res, 400, proposalPage(payload, token, "Choose an appointment option first."));
+      const result = await selectAppointment(payload, selectedIndex);
+      const notice = result.held
+        ? "Your request was received and a provisional hold was placed. Anna will confirm the appointment."
+        : "Your request was received. Anna will re-check the calendar and confirm the appointment.";
+      return html(res, 200, proposalPage(payload, token, notice));
+    } catch (error) {
+      return html(res, 409, proposalPage(payload, token, error.message));
+    }
+  }
+
   if (req.method === "GET" && url.pathname === "/api/icloud/calendars") {
     if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
 
@@ -697,6 +906,34 @@ async function route(req, res) {
         error: "SMTP verification failed",
         detail: error.message
       });
+    }
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/airtable/availability-proposal/preview") {
+    if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+    try {
+      const built = await buildAppointmentProposal(clean(url.searchParams.get("recordId")), {
+        startDate: clean(url.searchParams.get("startDate")),
+        days: url.searchParams.get("days"),
+        count: url.searchParams.get("count"),
+        nearbyToSarah: url.searchParams.get("nearbyToSarah") === "true",
+        milesFromSarah: url.searchParams.get("milesFromSarah")
+      });
+      return json(res, 200, { ok: true, readOnly: true, dryRun: true, recordId: built.job.recordId, address: built.job.propertyAddress, options: built.plan.recommendations, expiresAt: built.payload.expiresAt });
+    } catch (error) {
+      return json(res, 409, { error: "Appointment availability preview failed", detail: error.message });
+    }
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/airtable/send-availability-proposal") {
+    if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+    if (!appointmentProposalEnabled()) return json(res, 503, { error: "Appointment proposal sending is disabled", eventCreated: false });
+    try {
+      const body = await readJsonBody(req);
+      const result = await sendAvailabilityProposal(clean(url.searchParams.get("recordId")), body);
+      return json(res, result.status, result);
+    } catch (error) {
+      return json(res, 502, { error: "Appointment proposal delivery failed", detail: error.message });
     }
   }
 
