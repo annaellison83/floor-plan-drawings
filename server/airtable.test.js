@@ -26,7 +26,7 @@ test("maps a Jobs record without exposing credentials", () => {
   assert.equal(job.verifiedSqFt, 784);
   assert.equal(job.tourRequested, "No");
   assert.match(job.recordUrl, /rec08dRgUXUMPajMt$/);
-  assert.match(job.approvalUrl, /token=approval-secret$/);
+  assert.match(job.approvalUrl, /recordId=rec08dRgUXUMPajMt&token=approval-secret$/);
   assert.equal("token" in job, false);
 });
 

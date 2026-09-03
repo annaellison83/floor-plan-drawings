@@ -46,8 +46,8 @@ function mapJob(record, options = {}) {
     recordUrl: baseId && tableId && record.id
       ? `https://airtable.com/${encodeURIComponent(baseId)}/${encodeURIComponent(tableId)}/${encodeURIComponent(record.id)}`
       : "",
-    approvalUrl: approvalBaseUrl && approvalToken
-      ? `${approvalBaseUrl}${approvalBaseUrl.includes("?") ? "&" : "?"}token=${encodeURIComponent(approvalToken)}`
+    approvalUrl: approvalBaseUrl && approvalToken && record.id
+      ? `${approvalBaseUrl}${approvalBaseUrl.includes("?") ? "&" : "?"}recordId=${encodeURIComponent(record.id)}&token=${encodeURIComponent(approvalToken)}`
       : ""
   };
 }
