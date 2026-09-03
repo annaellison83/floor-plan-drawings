@@ -61,6 +61,13 @@ Required top labels:
 7. Stamp the Jobs record only after delivery succeeds.
 8. Record failures without marking the workflow complete so retries are safe.
 
+Render now has staged, disabled-by-default replacements for `NEW REQUEST`,
+`PROPERTY REVIEW NEEDED`, and the daily `FOLLOW-UP` digest. They use the same
+Communication Log reservation pattern as the existing QUOTE READY and client
+quote senders. Preview them with the protected
+`GET /api/airtable/workflow-preview?workflow=...` endpoint before enabling any
+flag. The preview is read-only and does not send mail or modify Jobs records.
+
 The scheduled follow-up job must run at 8:00 AM America/Los_Angeles and must
 not send an empty digest.
 
@@ -105,6 +112,13 @@ Secrets belong in Render, not GitHub:
 - `AIRTABLE_COMMUNICATION_LOG_TABLE=Communication Log`
 - Mail-provider credentials (provider still to be selected)
 - `INTERNAL_ADMIN_TOKEN` (already configured)
+
+Workflow flags remain false until each replacement has passed shadow-run and
+duplicate checks:
+
+- `ENABLE_NEW_REQUEST_SENDS`
+- `ENABLE_PROPERTY_REVIEW_SENDS`
+- `ENABLE_FOLLOW_UP_SENDS`
 
 The Airtable PAT is scoped only to the Floor Plan Drawings Command Center base
 with `data.records:read`, `data.records:write`, and `schema.bases:read`.

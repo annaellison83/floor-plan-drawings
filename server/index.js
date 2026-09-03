@@ -10,15 +10,27 @@ const { buildRoster } = require("./calendar-roster");
 const { appointmentDurationMinutes, schedulingPolicy } = require("./scheduling-policy");
 const { planAppointments } = require("./appointment-planner");
 const { isSmtpConfigured, sendMail, verifySmtp } = require("./mail");
-const { clientQuoteEmail, quoteReadyEmail } = require("./email-templates");
+const {
+  clientQuoteEmail,
+  followUpEmail,
+  newRequestEmail,
+  propertyReviewEmail,
+  quoteReadyEmail
+} = require("./email-templates");
 const {
   createClientQuoteLog,
+  createNotificationLog,
   createQuoteReadyLog,
   findClientQuoteDeliveries,
+  findNotificationDeliveries,
   findQuoteReadyDeliveries,
   getJob,
   listApprovedQuoteCandidates,
+  listFollowUpCandidates,
+  listNewRequestCandidates,
+  listPropertyReviewCandidates,
   listQuoteReadyCandidates,
+  communicationKey,
   updateCommunicationLog,
   updateJob
 } = require("./airtable");
@@ -36,8 +48,13 @@ const TEST_PROPERTY_ADDRESSES = [
 ];
 const quoteReadyLocks = new Set();
 const clientQuoteLocks = new Set();
+const internalNotificationLocks = new Set();
 let quoteReadyPollRunning = false;
 let clientQuotePollRunning = false;
+let newRequestPollRunning = false;
+let propertyReviewPollRunning = false;
+let followUpPollRunning = false;
+let followUpRunDate = "";
 
 function clean(value) {
   return value === undefined || value === null ? "" : String(value).trim();
@@ -80,7 +97,10 @@ function integrationStatus() {
     postgres: Boolean(process.env.DATABASE_URL),
     quoteReadySendEnabled: clean(process.env.ENABLE_QUOTE_READY_SENDS).toLowerCase() === "true",
     clientQuoteSendEnabled: clean(process.env.ENABLE_CLIENT_QUOTE_SENDS).toLowerCase() === "true",
-    provisionalHoldsEnabled: provisionalHoldEnabled()
+    provisionalHoldsEnabled: provisionalHoldEnabled(),
+    newRequestSendEnabled: newRequestEnabled(),
+    propertyReviewSendEnabled: propertyReviewEnabled(),
+    followUpSendEnabled: followUpEnabled()
   };
 }
 
@@ -90,6 +110,18 @@ function quoteReadyEnabled() {
 
 function clientQuoteEnabled() {
   return clean(process.env.ENABLE_CLIENT_QUOTE_SENDS).toLowerCase() === "true";
+}
+
+function newRequestEnabled() {
+  return clean(process.env.ENABLE_NEW_REQUEST_SENDS).toLowerCase() === "true";
+}
+
+function propertyReviewEnabled() {
+  return clean(process.env.ENABLE_PROPERTY_REVIEW_SENDS).toLowerCase() === "true";
+}
+
+function followUpEnabled() {
+  return clean(process.env.ENABLE_FOLLOW_UP_SENDS).toLowerCase() === "true";
 }
 
 function provisionalHoldEnabled() {
@@ -118,6 +150,20 @@ function localDate() {
     month: "2-digit",
     day: "2-digit"
   }).format(new Date());
+}
+
+function localTimeParts() {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Los_Angeles", hour: "2-digit", minute: "2-digit", hourCycle: "h23"
+  }).formatToParts(new Date()).reduce((result, part) => {
+    if (part.type !== "literal") result[part.type] = part.value;
+    return result;
+  }, {});
+}
+
+function followUpDueNow() {
+  const parts = localTimeParts();
+  return Number(parts.hour) === 8;
 }
 
 async function readJsonBody(req) {
@@ -276,6 +322,119 @@ async function pollClientQuotes() {
     console.error(`CLIENT QUOTE poll failed: ${error.message}`);
   } finally {
     clientQuotePollRunning = false;
+  }
+}
+
+async function deliverInternalNotification(recordId, eventType, buildEmail, statusStamp) {
+  const lockKey = `${eventType}:${recordId}`;
+  if (internalNotificationLocks.has(lockKey)) return { ok: false, status: 409, error: "Delivery already in progress" };
+  internalNotificationLocks.add(lockKey);
+  let logRecordId = "";
+  try {
+    const priorDeliveries = await findNotificationDeliveries(recordId, eventType);
+    if (priorDeliveries.length) return { ok: false, status: 409, error: "Duplicate delivery blocked" };
+    const job = await getJob(recordId);
+    const email = buildEmail(job);
+    const reservation = await createNotificationLog({
+      recordId,
+      eventType,
+      subject: email.subject,
+      status: "Pending",
+      summary: `Reserved by Render before ${eventType} delivery`
+    });
+    logRecordId = reservation.records && reservation.records[0] && reservation.records[0].id;
+    if (!logRecordId) throw new Error("Airtable did not return the reserved Communication Log ID");
+    const recipient = clean(process.env.SMTP_USER);
+    if (!recipient) throw new Error("SMTP_USER is not configured");
+    const delivery = await sendMail({ to: recipient, subject: email.subject, html: email.html, text: email.text });
+    await updateCommunicationLog(logRecordId, {
+      "Delivery Status": "Sent",
+      Summary: `Delivered by Render via SMTP${delivery.messageId ? `; message ${delivery.messageId}` : ""}`
+    });
+    await updateJob(recordId, { "Anna Email Status": statusStamp });
+    return { ok: true, status: 200, recordId, logRecordId, delivery: "sent" };
+  } catch (error) {
+    if (logRecordId) await updateCommunicationLog(logRecordId, { "Delivery Status": "Failed", Summary: `Render delivery failed: ${error.message}` }).catch(() => {});
+    return { ok: false, status: 502, error: `${eventType} delivery failed`, detail: error.message };
+  } finally {
+    internalNotificationLocks.delete(lockKey);
+  }
+}
+
+async function pollNewRequests() {
+  if (!newRequestEnabled() || newRequestPollRunning) return;
+  newRequestPollRunning = true;
+  try {
+    for (const candidate of await listNewRequestCandidates()) {
+      const result = await deliverInternalNotification(candidate.id, "NEW REQUEST", newRequestEmail, "Sent - New Order");
+      console.log(`NEW REQUEST poll ${candidate.id}: ${result.ok ? "sent" : result.error}`);
+    }
+  } catch (error) {
+    console.error(`NEW REQUEST poll failed: ${error.message}`);
+  } finally {
+    newRequestPollRunning = false;
+  }
+}
+
+async function pollPropertyReviews() {
+  if (!propertyReviewEnabled() || propertyReviewPollRunning) return;
+  propertyReviewPollRunning = true;
+  try {
+    for (const candidate of await listPropertyReviewCandidates()) {
+      const result = await deliverInternalNotification(candidate.id, "PROPERTY REVIEW NEEDED", propertyReviewEmail, "Sent - Manual Review");
+      console.log(`PROPERTY REVIEW poll ${candidate.id}: ${result.ok ? "sent" : result.error}`);
+    }
+  } catch (error) {
+    console.error(`PROPERTY REVIEW poll failed: ${error.message}`);
+  } finally {
+    propertyReviewPollRunning = false;
+  }
+}
+
+async function pollFollowUps() {
+  const today = localDate();
+  if (!followUpEnabled() || followUpPollRunning || followUpRunDate === today || !followUpDueNow()) return;
+  followUpPollRunning = true;
+  try {
+    const candidates = await listFollowUpCandidates();
+    const jobs = [];
+    for (const candidate of candidates) jobs.push(await getJob(candidate.id));
+    // Airtable's automation does not send an empty digest. Mark the local run
+    // only after a non-empty digest has been delivered successfully.
+    if (!jobs.length) {
+      followUpRunDate = today;
+      return;
+    }
+    const communication = communicationKey("daily-follow-up", "follow_up", today);
+    if ((await findNotificationDeliveries(communication, "FOLLOW-UP")).length) {
+      followUpRunDate = today;
+      return;
+    }
+    const email = followUpEmail(jobs, today);
+    const reservation = await createNotificationLog({
+      recordId: "daily-follow-up",
+      communication,
+      eventType: "FOLLOW-UP",
+      subject: email.subject,
+      status: "Pending",
+      summary: `Reserved by Render for ${jobs.length} follow-up${jobs.length === 1 ? "" : "s"}`
+    });
+    const logRecordId = reservation.records && reservation.records[0] && reservation.records[0].id;
+    if (!logRecordId) throw new Error("Airtable did not return the follow-up Communication Log ID");
+    try {
+      const recipient = clean(process.env.SMTP_USER);
+      if (!recipient) throw new Error("SMTP_USER is not configured");
+      const delivery = await sendMail({ to: recipient, subject: email.subject, html: email.html, text: email.text });
+      await updateCommunicationLog(logRecordId, { "Delivery Status": "Sent", Summary: `Delivered by Render via SMTP${delivery.messageId ? `; message ${delivery.messageId}` : ""}` });
+      followUpRunDate = today;
+    } catch (error) {
+      await updateCommunicationLog(logRecordId, { "Delivery Status": "Failed", Summary: `Render follow-up delivery failed: ${error.message}` }).catch(() => {});
+      throw error;
+    }
+  } catch (error) {
+    console.error(`FOLLOW-UP poll failed: ${error.message}`);
+  } finally {
+    followUpPollRunning = false;
   }
 }
 
@@ -575,6 +734,33 @@ async function route(req, res) {
     }
   }
 
+  if (req.method === "GET" && url.pathname === "/api/airtable/workflow-preview") {
+    if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+    try {
+      const workflow = clean(url.searchParams.get("workflow")).toLowerCase();
+      const candidates = workflow === "new request"
+        ? await listNewRequestCandidates()
+        : workflow === "property review needed"
+          ? await listPropertyReviewCandidates()
+          : workflow === "follow-up"
+            ? await listFollowUpCandidates()
+            : [];
+      const jobs = [];
+      for (const candidate of candidates) jobs.push(await getJob(candidate.id));
+      const emails = workflow === "new request"
+        ? jobs.map((job) => ({ recordId: job.recordId, ...newRequestEmail(job) }))
+        : workflow === "property review needed"
+          ? jobs.map((job) => ({ recordId: job.recordId, ...propertyReviewEmail(job) }))
+          : workflow === "follow-up"
+            ? [{ recordId: "daily-follow-up", ...followUpEmail(jobs, localDate()) }]
+            : [];
+      if (url.searchParams.get("includeHtml") !== "true") emails.forEach((email) => { delete email.html; });
+      return json(res, 200, { ok: true, readOnly: true, dryRun: true, workflow, candidateCount: jobs.length, emails });
+    } catch (error) {
+      return json(res, 502, { error: "Workflow preview failed", detail: error.message });
+    }
+  }
+
   if (req.method === "POST" && url.pathname === "/api/email/test") {
     if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
 
@@ -624,8 +810,14 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`${SERVICE_NAME} listening on ${PORT}`);
+  setTimeout(pollNewRequests, 5000).unref();
+  setInterval(pollNewRequests, Number(process.env.NEW_REQUEST_POLL_MS) || 60000).unref();
+  setTimeout(pollPropertyReviews, 6000).unref();
+  setInterval(pollPropertyReviews, Number(process.env.PROPERTY_REVIEW_POLL_MS) || 60000).unref();
   setTimeout(pollQuoteReady, 5000).unref();
   setInterval(pollQuoteReady, Number(process.env.QUOTE_READY_POLL_MS) || 60000).unref();
   setTimeout(pollClientQuotes, 8000).unref();
   setInterval(pollClientQuotes, Number(process.env.CLIENT_QUOTE_POLL_MS) || 60000).unref();
+  setTimeout(pollFollowUps, 10000).unref();
+  setInterval(pollFollowUps, Number(process.env.FOLLOW_UP_POLL_MS) || 60000).unref();
 });

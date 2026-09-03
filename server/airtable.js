@@ -42,6 +42,12 @@ function mapJob(record, options = {}) {
     suggestedQuote: first(fields, ["Suggested Quote", "Quote Amount"]),
     finalQuote: first(fields, ["Quote Amount", "Final Quote Preview", "Suggested Quote"]),
     quoteNotes: first(fields, ["Quote Calculation Notes", "Quote Notes"]),
+    followUpDate: first(fields, ["Follow-Up Date", "Follow Up Date"]),
+    quoteSentDate: first(fields, ["Quote Sent Date"]),
+    clientResponse: first(fields, ["Client Response"]),
+    annaEmailStatus: first(fields, ["Anna Email Status"]),
+    propertyCheckStatus: first(fields, ["Property Check Status"]),
+    propertyResearchComplete: first(fields, ["Property Research Complete"]),
     tourRequested: yesNo(first(fields, ["3D Tour Requested", "3D Tour"])),
     mapUrl: first(fields, ["Aerial Map URL", "Aerial URL"]),
     contextMapUrl: first(fields, ["LA Context Map URL", "Context Map URL"]),
@@ -94,6 +100,19 @@ function clientQuoteLogFields({ recordId, clientName, subject, status = "Pending
     "Email Subject": clean(subject),
     "Delivery Status": status,
     Summary: clean(summary) || `Client quote reserved for ${clean(clientName) || "client"}`
+  };
+}
+
+function notificationLogFields({ recordId, eventType, subject, status = "Pending", summary = "", communication }) {
+  return {
+    Communication: clean(communication) || communicationKey(recordId, eventType),
+    "Job Record ID": clean(recordId),
+    Direction: "Outgoing",
+    Channel: "Email",
+    "Event Type": clean(eventType),
+    "Email Subject": clean(subject),
+    "Delivery Status": status,
+    Summary: clean(summary)
   };
 }
 
@@ -174,6 +193,21 @@ async function findClientQuoteDeliveries(recordId, options = {}) {
   return body.records || [];
 }
 
+async function findNotificationDeliveries(recordId, eventType, options = {}) {
+  const settings = { ...config(), ...options };
+  const key = clean(recordId);
+  if (!settings.token || !settings.baseId) throw new Error("Airtable is not configured");
+  if (!key || !eventType) throw new Error("A notification key and event type are required");
+  const formula = `AND({Communication}='${key}',{Event Type}='${clean(eventType)}',OR({Delivery Status}='Pending',{Delivery Status}='Sent'))`;
+  const url = new URL(`${AIRTABLE_API}/${encodeURIComponent(settings.baseId)}/${encodeURIComponent(settings.communicationLogTable)}`);
+  url.searchParams.set("filterByFormula", formula);
+  url.searchParams.set("maxRecords", "10");
+  url.searchParams.append("fields[]", "Communication");
+  url.searchParams.append("fields[]", "Delivery Status");
+  const body = await airtableJson(url.href, { token: settings.token });
+  return body.records || [];
+}
+
 async function listApprovedQuoteCandidates(options = {}) {
   const settings = { ...config(), ...options };
   if (!settings.token || !settings.baseId) throw new Error("Airtable is not configured");
@@ -184,6 +218,39 @@ async function listApprovedQuoteCandidates(options = {}) {
   url.searchParams.set("maxRecords", "10");
   const body = await airtableJson(url.href, { token: settings.token });
   return body.records || [];
+}
+
+async function listNewRequestCandidates(options = {}) {
+  const settings = { ...config(), ...options };
+  if (!settings.token || !settings.baseId) throw new Error("Airtable is not configured");
+  const formula = "AND({Website Workflow}='Order',{Anna Email Status}='Not Sent',{Property Research Complete}=1)";
+  const table = settings.jobsTableId || settings.jobsTable;
+  const url = new URL(`${AIRTABLE_API}/${encodeURIComponent(settings.baseId)}/${encodeURIComponent(table)}`);
+  url.searchParams.set("filterByFormula", formula);
+  url.searchParams.set("maxRecords", "20");
+  return (await airtableJson(url.href, { token: settings.token })).records || [];
+}
+
+async function listPropertyReviewCandidates(options = {}) {
+  const settings = { ...config(), ...options };
+  if (!settings.token || !settings.baseId) throw new Error("Airtable is not configured");
+  const formula = "AND({Website Workflow}='Quick Quote',{Anna Email Status}='Not Sent',{Property Research Complete}=1,OR({Property Check Status}='No Match',{Property Check Status}='Needs Manual Review'))";
+  const table = settings.jobsTableId || settings.jobsTable;
+  const url = new URL(`${AIRTABLE_API}/${encodeURIComponent(settings.baseId)}/${encodeURIComponent(table)}`);
+  url.searchParams.set("filterByFormula", formula);
+  url.searchParams.set("maxRecords", "20");
+  return (await airtableJson(url.href, { token: settings.token })).records || [];
+}
+
+async function listFollowUpCandidates(options = {}) {
+  const settings = { ...config(), ...options };
+  if (!settings.token || !settings.baseId) throw new Error("Airtable is not configured");
+  const formula = "AND({Quote Sent Date}!='',{Follow-Up Date}!='',{Follow-Up Date}<=TODAY(),OR({Client Response}='Awaiting Reply',{Client Response}='No Response',{Client Response}=''))";
+  const table = settings.jobsTableId || settings.jobsTable;
+  const url = new URL(`${AIRTABLE_API}/${encodeURIComponent(settings.baseId)}/${encodeURIComponent(table)}`);
+  url.searchParams.set("filterByFormula", formula);
+  url.searchParams.set("maxRecords", "50");
+  return (await airtableJson(url.href, { token: settings.token })).records || [];
 }
 
 async function createQuoteReadyLog(input, options = {}) {
@@ -205,6 +272,17 @@ async function createClientQuoteLog(input, options = {}) {
     token: settings.token,
     method: "POST",
     body: { records: [{ fields: clientQuoteLogFields(input) }], typecast: false }
+  });
+}
+
+async function createNotificationLog(input, options = {}) {
+  const settings = { ...config(), ...options };
+  if (!settings.token || !settings.baseId) throw new Error("Airtable is not configured");
+  const url = `${AIRTABLE_API}/${encodeURIComponent(settings.baseId)}/${encodeURIComponent(settings.communicationLogTable)}`;
+  return airtableJson(url, {
+    token: settings.token,
+    method: "POST",
+    body: { records: [{ fields: notificationLogFields(input) }], typecast: false }
   });
 }
 
@@ -241,12 +319,18 @@ module.exports = {
   config,
   createClientQuoteLog,
   createQuoteReadyLog,
+  createNotificationLog,
   findClientQuoteDeliveries,
   findQuoteReadyDeliveries,
+  findNotificationDeliveries,
   getJob,
   listApprovedQuoteCandidates,
+  listFollowUpCandidates,
+  listNewRequestCandidates,
+  listPropertyReviewCandidates,
   listQuoteReadyCandidates,
   mapJob,
+  notificationLogFields,
   quoteReadyLogFields,
   updateCommunicationLog,
   updateJob

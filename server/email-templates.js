@@ -114,4 +114,46 @@ function clientQuoteEmail(job) {
   return { subject, html, text: plainText };
 }
 
-module.exports = { clientQuoteEmail, escapeHtml, quotePricing, quoteReadyEmail, safeUrl };
+function internalLink(label, href) {
+  const safe = safeUrl(href);
+  return safe ? `<a href="${escapeHtml(safe)}" style="color:#0b57d0;font-weight:700;">${escapeHtml(label)}</a>` : "";
+}
+
+function internalEmailShell(label, title, intro, bodyHtml, bodyText) {
+  const subject = `${label} | ${title}`;
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;background:#f3f1eb;color:#22332e;font-family:Arial,Helvetica,sans-serif}.shell{width:100%;background:#f3f1eb}.canvas{width:calc(100% - 32px);max-width:1100px;margin:0 auto}.card{margin:24px auto;background:#fbf8f1;border:1px solid #ddd7ca;border-radius:18px}.pad{padding:32px}.eyebrow{color:#53635c;font-size:12px;line-height:17px;font-weight:700;letter-spacing:.15em;text-transform:uppercase}.title{margin:12px 0 10px;font-size:32px;line-height:40px;color:#173f36}.intro{font-size:16px;line-height:25px;color:#53635c}.table{width:100%;border-collapse:collapse;margin-top:24px}.table th,.table td{padding:13px 12px;border:1px solid #d9d5ca;text-align:left;vertical-align:top;font-size:14px;line-height:21px}.table th{background:#e3eadf;color:#394842;font-size:12px;text-transform:uppercase;letter-spacing:.08em}.panel{margin-top:22px;padding:18px 20px;background:#e3eadf;border-radius:14px;font-size:15px;line-height:24px}@media only screen and (max-width:640px){.canvas{width:100%!important}.card{margin:8px 0;border-radius:12px}.pad{padding:20px 14px!important}.title{font-size:26px;line-height:33px}.table{display:block;overflow-wrap:anywhere}.table thead{display:none}.table tbody,.table tr,.table td{display:block;width:auto!important}.table tr{margin:12px 0;border:1px solid #d9d5ca}.table td{border:0;border-bottom:1px solid #e4e0d6}.table td:last-child{border-bottom:0}.table td:before{display:block;margin-bottom:3px;color:#53635c;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}.table td:nth-child(1):before{content:"Client"}.table td:nth-child(2):before{content:"Contact"}.table td:nth-child(3):before{content:"Property"}.table td:nth-child(4):before{content:"Details"}.table td:nth-child(5):before{content:"Action"}}</style></head><body><table role="presentation" class="shell" width="100%"><tr><td><table role="presentation" class="canvas" width="100%"><tr><td class="card"><div class="pad"><div class="eyebrow">${escapeHtml(label)}</div><h1 class="title">${escapeHtml(title)}</h1><p class="intro">${escapeHtml(intro)}</p>${bodyHtml}</div></td></tr></table></td></tr></table></body></html>`;
+  return { subject, html, text: [label, title, intro, bodyText].filter(Boolean).join("\n\n") };
+}
+
+function newRequestEmail(job) {
+  const title = text(job.clientName, "New website request");
+  const rows = `<table class="table" role="presentation"><tr><th>Client</th><th>Contact</th><th>Property</th><th>Details</th><th>Action</th></tr><tr><td>${escapeHtml(text(job.clientName))}</td><td>${escapeHtml([job.clientEmail, job.clientPhone].filter(Boolean).join(" · "))}</td><td>${escapeHtml(text(job.propertyAddress))}</td><td>${escapeHtml([job.service, job.scope, job.tourRequested && `3D tour: ${job.tourRequested}`].filter(Boolean).join("\n"))}</td><td>${internalLink("Open Airtable record", job.recordUrl)}</td></tr></table>`;
+  const bodyText = `Client: ${text(job.clientName)}\nContact: ${[job.clientEmail, job.clientPhone].filter(Boolean).join(" · ")}\nProperty: ${text(job.propertyAddress)}\nDetails: ${[job.service, job.scope].filter(Boolean).join(" · ")}\nAirtable: ${job.recordUrl || ""}`;
+  return internalEmailShell("NEW REQUEST", title, "A new website order is ready for review.", rows, bodyText);
+}
+
+function propertyReviewEmail(job) {
+  const title = text(job.propertyAddress, "Property review needed");
+  const rows = `<div class="panel"><strong>${escapeHtml(text(job.propertyCheckStatus, "Property match needs review"))}</strong><br>${escapeHtml(text(job.quoteNotes, "The property research did not produce a confident match."))}<br><br>${internalLink("Open Airtable record", job.recordUrl)}${job.mapUrl ? ` &nbsp; ${internalLink("Open aerial map", job.mapUrl)}` : ""}</div>`;
+  const bodyText = `${text(job.propertyCheckStatus, "Property match needs review")}\n${text(job.quoteNotes, "The property research did not produce a confident match.")}\nAirtable: ${job.recordUrl || ""}\nAerial: ${job.mapUrl || ""}`;
+  return internalEmailShell("PROPERTY REVIEW NEEDED", title, "Render found a property-research result that needs Anna's review before quoting.", rows, bodyText);
+}
+
+function followUpEmail(jobs, dateLabel) {
+  const list = Array.isArray(jobs) ? jobs : [];
+  const title = list.length ? `${list.length} follow-up${list.length === 1 ? "" : "s"} due today` : "No follow-ups due today";
+  const rows = list.length ? `<table class="table" role="presentation"><tr><th>Client</th><th>Contact</th><th>Property</th><th>Details</th><th>Action</th></tr>${list.map((job) => `<tr><td>${escapeHtml(text(job.clientName))}</td><td>${escapeHtml([job.clientEmail, job.clientPhone].filter(Boolean).join(" · "))}</td><td>${escapeHtml(text(job.propertyAddress))}</td><td>${escapeHtml([job.service, job.quoteSentDate && `Quote sent: ${job.quoteSentDate}`, job.followUpDate && `Due: ${job.followUpDate}`].filter(Boolean).join("\n"))}</td><td>${internalLink("Open Airtable record", job.recordUrl)}</td></tr>`).join("")}</table>` : `<div class="panel">No client follow-up messages are due on ${escapeHtml(dateLabel)}. No email should be sent by the scheduled job.</div>`;
+  const bodyText = list.length ? list.map((job) => `${text(job.clientName)} | ${[job.clientEmail, job.clientPhone].filter(Boolean).join(" · ")} | ${text(job.propertyAddress)} | ${job.recordUrl || ""}`).join("\n") : "No follow-ups due; no email should be sent.";
+  return internalEmailShell("FOLLOW-UP", title, `Quote follow-ups due on ${dateLabel}.`, rows, bodyText);
+}
+
+module.exports = {
+  clientQuoteEmail,
+  escapeHtml,
+  followUpEmail,
+  newRequestEmail,
+  propertyReviewEmail,
+  quotePricing,
+  quoteReadyEmail,
+  safeUrl
+};
