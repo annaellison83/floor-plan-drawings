@@ -1277,6 +1277,30 @@ async function route(req, res) {
     }
   }
 
+  if (req.method === "GET" && url.pathname === "/api/airtable/client-quote-preview") {
+    if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+    try {
+      const recordId = clean(url.searchParams.get("recordId"));
+      const job = await getJob(recordId);
+      const preview = clientQuoteEmail(job);
+      if (url.searchParams.get("format") === "html") return html(res, 200, preview.html);
+      return json(res, 200, {
+        ok: true,
+        readOnly: true,
+        dryRun: true,
+        emailSent: false,
+        airtableRecordChanged: false,
+        recordId: job.recordId,
+        recipient: job.clientEmail || null,
+        subject: preview.subject,
+        html: preview.html,
+        text: preview.text
+      });
+    } catch (error) {
+      return json(res, 502, { error: "Client quote preview failed", detail: error.message });
+    }
+  }
+
   if (req.method === "GET" && url.pathname === "/api/airtable/workflow-preview") {
     if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
     try {

@@ -62,6 +62,11 @@ Anna can inspect the latest failed delivery records with the protected
 endpoint is read-only and returns only workflow, record, subject, status, and
 summary fields.
 
+The approved client email can be inspected without delivery at
+`GET /api/airtable/client-quote-preview?recordId=rec...` (or add
+`format=html` for a browser preview). It is protected by `X-Admin-Token` and
+does not change Airtable.
+
 Each workflow also has a shadow switch (`SHADOW_NEW_REQUEST`,
 `SHADOW_PROPERTY_REVIEW`, `SHADOW_QUOTE_READY`, `SHADOW_CLIENT_QUOTE`, or
 `SHADOW_FOLLOW_UP`). Shadow mode reads candidates and renders the message but
