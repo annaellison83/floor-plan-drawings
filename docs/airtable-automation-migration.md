@@ -68,6 +68,11 @@ quote senders. Preview them with the protected
 `GET /api/airtable/workflow-preview?workflow=...` endpoint before enabling any
 flag. The preview is read-only and does not send mail or modify Jobs records.
 
+The note-translation automation remains deliberately unchanged for now. Its
+AI rewrite needs a separately selected model/provider and an explicit comparison
+against the current Airtable output before Render writes `Quote Calculation
+Notes`.
+
 The scheduled follow-up job must run at 8:00 AM America/Los_Angeles and must
 not send an empty digest.
 
