@@ -17,6 +17,10 @@ disabled as part of the preparatory work.
    communication-log reservations and duplicate-delivery guards.
 6. Scheduling policy is live at the protected read-only
    `/api/icloud/scheduling-policy` endpoint.
+7. Read-only worker availability is live at `/api/icloud/availability`.
+8. The dry-run planner is live at
+   `/api/icloud/appointments/dry-run`; it recommends a worker/slot without
+   creating events or changing Airtable.
 
 ## Execution order
 
