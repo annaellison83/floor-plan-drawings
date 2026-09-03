@@ -98,13 +98,16 @@ function rankWorkers({ weekday, squareFeet, nearbyToSarah = false, bookedThisWee
       const weekCount = Number(bookedThisWeek[name]) || 0;
       const preferredDay = day >= 0 && policy.preferredWeekdays.includes(day);
       const atSoftCap = policy.weeklySoftCap !== null && weekCount >= policy.weeklySoftCap;
+      // Corrie's salary makes her the primary assignment until her soft cap;
+      // Ricky is next, and Sarah is reserved for spillover.
+      const staffingPriority = name === "corrie" ? -40 : name === "ricky" ? -20 : 100;
       const spilloverPenalty = policy.spilloverOnly ? 100 : 0;
       return {
         name,
         weekCount,
         preferredDay,
         atSoftCap,
-        score: spilloverPenalty + (atSoftCap ? 40 : 0) + (preferredDay ? -20 : 0) + weekCount
+        score: staffingPriority + spilloverPenalty + (atSoftCap ? 80 : 0) + (preferredDay ? -10 : 0) + weekCount
       };
     })
     .sort((left, right) => left.score - right.score);
