@@ -51,6 +51,8 @@ const TEST_PROPERTY_ADDRESSES = [
   "4011 Scandia Way, Los Angeles, CA 90065",
   "2750 Medlow Ave, Los Angeles, CA 90065"
 ];
+// Test-only delivery target. Production notifications continue to use SMTP_USER.
+const TEST_EMAIL_RECIPIENT = "eric.greenburg@gmail.com";
 const quoteReadyLocks = new Set();
 const clientQuoteLocks = new Set();
 const internalNotificationLocks = new Set();
@@ -644,7 +646,7 @@ async function buildTestQuote() {
   return {
     propertyAddress: candidate.fullAddress || address,
     clientName: "Eric Greenburg",
-    clientEmail: "ericreenburg@gmail.com",
+    clientEmail: TEST_EMAIL_RECIPIENT,
     clientPhone: "909-921-7490",
     service: "Color Interior + Exterior",
     milesFromNorthHollywood: research.milesFromNorthHollywood,
@@ -1022,8 +1024,7 @@ async function route(req, res) {
   if (req.method === "POST" && url.pathname === "/api/email/test") {
     if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
 
-    const recipient = clean(process.env.SMTP_USER);
-    if (!recipient) return json(res, 503, { error: "SMTP_USER is not configured" });
+    const recipient = TEST_EMAIL_RECIPIENT;
 
     try {
       const sampleJob = await buildTestQuote();
@@ -1042,8 +1043,7 @@ async function route(req, res) {
 
   if (req.method === "POST" && url.pathname === "/api/email/test-follow-up") {
     if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
-    const recipient = clean(process.env.SMTP_USER);
-    if (!recipient) return json(res, 503, { error: "SMTP_USER is not configured" });
+    const recipient = TEST_EMAIL_RECIPIENT;
     try {
       const sample = followUpEmail(buildTestFollowUp(), localDate());
       const delivery = await sendMail({
