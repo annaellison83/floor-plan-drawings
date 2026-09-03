@@ -6,34 +6,37 @@ Updated: 2026-09-02
 
 - Repository: `annaellison83/floor-plan-drawings`
 - Branch: `main`
-- Latest synced commit: `f0765b4` (`Add iCloud calendar roster endpoint`)
-- Netlify website, Netlify functions, Airtable base, Airtable automations, and quote/order workflows remain live and unchanged during the transition.
+- Latest synced commit: `4d62d12` (`Open exact Airtable job after quote approval`)
+- Netlify website and functions remain live. Airtable remains the dashboard/source of truth. Render now sends the migrated QUOTE READY and approved-client quote emails.
 - Render service: `floorplan-drawings-backend` at `https://floor-plan-drawings.onrender.com`
 - Render settings: `npm install --prefix server`; `node server/index.js`; health path `/healthz`; Starter plan; auto-deploy from `main` enabled.
-- Render health is passing with iCloud integration enabled.
+- Render health is passing with Airtable, Gmail SMTP, and iCloud integrations enabled.
 - Protected read-only iCloud discovery and roster endpoints are live. The roster classifies `anna` as owner, `corrie`, `sarah`, and `ricardo` as workers, and excludes `Home` and `Reminders`.
 - No calendar events were created or modified.
 
-## Email investigation
+## Email and quote safeguards
 
-The Netlify functions do not deliver email. `netlify/functions/fpd-intake.js` writes submission fields to Airtable, and `netlify/functions/approve-quote.js` updates the Airtable approval fields. Email subjects, formatting, reminders, follow-ups, and client delivery remain in Airtable Automations / Airtable's sender.
+`netlify/functions/fpd-intake.js` writes the submission to Airtable before any notification is attempted. Render polls Airtable every minute, reserves a Communication Log row before sending, retries failed sends while the job remains `Not Sent`, and stamps `Sent` only after Gmail SMTP accepts the message. Duplicate sends are blocked by the Communication Log reservation.
 
-The likely fix is therefore in the Airtable automation's deployed configuration, not in the Netlify code. Draft edits alone are insufficient; each changed automation must be explicitly updated/published.
+The approval page now saves edits with confirmation, records manually entered size as `Anna confirmed during quote review`, and links directly to the expanded Airtable job after approval. Automatic quote zones are persisted from the two-hub distance resolver; manual Airtable zones still override them.
+
+For missing size, the system does not trust Google AI summaries or rental-unit descriptions as whole-building size. It provides Google, Zillow, Redfin, Realtor.com, and Homes.com search links for manual confirmation.
+
+Current resilience gap: the fallback Airtable QUOTE READY automation is disabled/undeployed, so it is a manual rollback path rather than an automatic second sender. A true mission-critical failover still needs an independently scheduled Airtable-sender fallback and a separate-channel alert when a record remains unsent.
 
 ## Connector status
 
-- Gmail connector installed locally, but Google authentication is incomplete. Do not request or paste the Gmail password or tokens into chat.
+- Gmail connector installed locally, but Google authentication is incomplete. Render Gmail SMTP is configured separately; do not request or paste the Gmail password or tokens into chat.
 - Airtable CLI authentication is verified with a PAT restricted to the Floor Plan Drawings Command Center base. The automation audit is recorded in `docs/airtable-automation-migration.md`.
-- Netlify CLI authentication is verified as Anna on the `FPD` team, and this checkout is linked to the existing `floorplandrawings` site. No deploy was triggered.
+- Netlify CLI authentication is verified as Anna on the `FPD` team, and this checkout is linked to the existing `floorplandrawings` site. Production deploys are Git-triggered.
 - The Airtable and Netlify Codex plugins are installed. Their in-app OAuth connectors are separate from the verified CLI sessions.
 
 ## Next safe steps
 
-1. Select the Render mail provider and add its credentials directly in Render.
-2. Implement equivalent, idempotent Render jobs that read/write Airtable and send through the approved mail sender. Keep the existing Airtable automations enabled while testing.
-3. Add a dry-run/replay path and communication log so each Airtable record can be tested without duplicate sends.
-4. Compare Render output with the deployed Airtable versions, then cut over one workflow at a time. Do not disable Airtable automations until parity and rollback checks pass.
-5. Keep Gmail connector access optional until mailbox-level verification is needed.
+1. Add an automatic, delayed Airtable-sender fallback for QUOTE READY after a Render/Gmail failure, with an idempotent claim field.
+2. Add a separate-channel alert for jobs that remain unsent beyond the retry window.
+3. Keep the current disabled Airtable QUOTE READY flow available as a manual rollback until the independent fallback is tested.
+4. Finish the iCloud custom-domain DNS cutover only after deciding whether Bluehost will continue hosting DNS.
 
 ## Security constraints
 
