@@ -683,6 +683,35 @@ function buildTestFollowUp() {
   }];
 }
 
+function buildTestAppointmentSlots() {
+  const slots = [];
+  const cursor = new Date(`${localDate()}T12:00:00Z`);
+  const workers = ["corrie", "ricky", "sarah"];
+  const starts = ["11:00", "13:00", "11:00"];
+  while (slots.length < workers.length) {
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+    const weekday = cursor.getUTCDay();
+    if (weekday === 0 || weekday === 6) continue;
+    const date = cursor.toISOString().slice(0, 10);
+    slots.push({
+      date,
+      localStart: starts[slots.length],
+      worker: workers[slots.length],
+      durationMinutes: 90,
+      deliveryTarget: { label: "Target delivery to be confirmed" }
+    });
+  }
+  return slots;
+}
+
+function testSchedulingPreviewJob() {
+  return {
+    clientName: "Eric Greenburg",
+    propertyAddress: "349 Mount Washington Dr, Los Angeles, CA 90065",
+    service: "Color Interior + Exterior"
+  };
+}
+
 async function route(req, res) {
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
 
@@ -692,6 +721,12 @@ async function route(req, res) {
       status: "ok",
       health: "/healthz"
     });
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/email/test-scheduling-preview") {
+    const job = testSchedulingPreviewJob();
+    const email = clientAvailabilityProposalEmail(job, "", buildTestAppointmentSlots());
+    return html(res, 200, email.html.replace("</body>", "<p style=\"max-width:680px;margin:0 auto 24px;padding:0 16px;color:#6b7067;font:13px/20px Arial,sans-serif;text-align:center;\">TEST ONLY — no appointment was requested or recorded.</p></body>"));
   }
 
   if (req.method === "GET" && url.pathname === "/healthz") {
@@ -1055,6 +1090,26 @@ async function route(req, res) {
       return json(res, 200, { ok: true, test: true, workflow: "FOLLOW-UP", recipient, ...delivery });
     } catch (error) {
       return json(res, 502, { error: "Follow-up test email delivery failed", detail: error.message });
+    }
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/email/test-scheduling") {
+    if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+    const recipient = TEST_EMAIL_RECIPIENT;
+    try {
+      const sampleJob = await buildTestQuote();
+      const slots = buildTestAppointmentSlots();
+      const proposalUrl = "https://floor-plan-drawings.onrender.com/api/email/test-scheduling-preview";
+      const sample = clientAvailabilityProposalEmail(sampleJob, proposalUrl, slots);
+      const delivery = await sendMail({
+        to: recipient,
+        subject: `[TEST — NO WORKFLOW] ${sample.subject}`,
+        html: sample.html,
+        text: sample.text
+      });
+      return json(res, 200, { ok: true, test: true, workflow: "APPOINTMENT OPTIONS", recipient, propertyAddress: sampleJob.propertyAddress, options: slots.length, ...delivery });
+    } catch (error) {
+      return json(res, 502, { error: "Scheduling test email delivery failed", detail: error.message });
     }
   }
 
