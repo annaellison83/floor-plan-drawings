@@ -3,7 +3,12 @@ const { discoverCalendars } = require("./icloud");
 const { buildRoster } = require("./calendar-roster");
 const { isSmtpConfigured, sendMail, verifySmtp } = require("./mail");
 const { quoteReadyEmail } = require("./email-templates");
-const { findQuoteReadyDeliveries, getJob } = require("./airtable");
+const {
+  createQuoteReadyLog,
+  findQuoteReadyDeliveries,
+  getJob,
+  updateCommunicationLog
+} = require("./airtable");
 
 const PORT = Number(process.env.PORT) || 10000;
 const SERVICE_NAME = "floorplan-drawings-backend";
@@ -16,6 +21,7 @@ const TEST_PROPERTY_ADDRESSES = [
   "4011 Scandia Way, Los Angeles, CA 90065",
   "2750 Medlow Ave, Los Angeles, CA 90065"
 ];
+const quoteReadyLocks = new Set();
 
 function clean(value) {
   return value === undefined || value === null ? "" : String(value).trim();
@@ -53,7 +59,8 @@ function integrationStatus() {
     gmailSmtp: isSmtpConfigured(),
     icloud: Boolean(process.env.ICLOUD_EMAIL && process.env.ICLOUD_APP_PASSWORD),
     googleMaps: Boolean(process.env.GOOGLE_MAPS_STATIC_KEY || process.env.GOOGLE_MAPS_SERVER_KEY),
-    postgres: Boolean(process.env.DATABASE_URL)
+    postgres: Boolean(process.env.DATABASE_URL),
+    quoteReadySendEnabled: clean(process.env.ENABLE_QUOTE_READY_SENDS).toLowerCase() === "true"
   };
 }
 
@@ -198,7 +205,7 @@ async function route(req, res) {
         airtableRecordChanged: false,
         deliveryGuard: {
           allowed: priorDeliveries.length === 0,
-          reason: priorDeliveries.length === 0 ? "No prior sent QUOTE READY log found" : "Already sent",
+          reason: priorDeliveries.length === 0 ? "No pending or sent QUOTE READY log found" : "Pending or already sent",
           priorSentCount: priorDeliveries.length,
           priorDeliveryRecordIds: priorDeliveries.map((delivery) => delivery.id)
         },
@@ -233,6 +240,58 @@ async function route(req, res) {
       return json(res, 200, { ok: true, test: true, recipient, ...delivery });
     } catch (error) {
       return json(res, 502, { error: "Test email delivery failed", detail: error.message });
+    }
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/airtable/send-quote-ready") {
+    if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+    if (clean(process.env.ENABLE_QUOTE_READY_SENDS).toLowerCase() !== "true") {
+      return json(res, 503, { error: "QUOTE READY sending is disabled" });
+    }
+
+    const recordId = clean(url.searchParams.get("recordId"));
+    if (quoteReadyLocks.has(recordId)) return json(res, 409, { error: "QUOTE READY delivery is already in progress" });
+    quoteReadyLocks.add(recordId);
+    let logRecordId = "";
+
+    try {
+      const priorDeliveries = await findQuoteReadyDeliveries(recordId);
+      if (priorDeliveries.length) {
+        return json(res, 409, {
+          error: "Duplicate delivery blocked",
+          priorDeliveryRecordIds: priorDeliveries.map((delivery) => delivery.id)
+        });
+      }
+
+      const job = await getJob(recordId);
+      const email = quoteReadyEmail(job);
+      const reservation = await createQuoteReadyLog({
+        recordId,
+        subject: email.subject,
+        status: "Pending",
+        summary: "Reserved by Render before SMTP delivery"
+      });
+      logRecordId = reservation.records && reservation.records[0] && reservation.records[0].id;
+      if (!logRecordId) throw new Error("Airtable did not return the reserved Communication Log ID");
+
+      const recipient = clean(process.env.SMTP_USER);
+      if (!recipient) throw new Error("SMTP_USER is not configured");
+      const delivery = await sendMail({ to: recipient, subject: email.subject, html: email.html, text: email.text });
+      await updateCommunicationLog(logRecordId, {
+        "Delivery Status": "Sent",
+        Summary: `Delivered by Render via Gmail SMTP${delivery.messageId ? `; message ${delivery.messageId}` : ""}`
+      });
+      return json(res, 200, { ok: true, recordId, logRecordId, delivery: "sent" });
+    } catch (error) {
+      if (logRecordId) {
+        await updateCommunicationLog(logRecordId, {
+          "Delivery Status": "Failed",
+          Summary: `Render delivery failed: ${error.message}`
+        }).catch(() => {});
+      }
+      return json(res, 502, { error: "QUOTE READY delivery failed", detail: error.message });
+    } finally {
+      quoteReadyLocks.delete(recordId);
     }
   }
 

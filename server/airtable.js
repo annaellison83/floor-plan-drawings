@@ -123,7 +123,7 @@ async function findQuoteReadyDeliveries(recordId, options = {}) {
   if (!settings.token || !settings.baseId) throw new Error("Airtable is not configured");
   if (!id || !/^rec[a-zA-Z0-9]+$/.test(id)) throw new Error("A valid Airtable record ID is required");
 
-  const formula = `AND({Job Record ID}='${id}',{Event Type}='QUOTE READY',{Delivery Status}='Sent')`;
+  const formula = `AND({Job Record ID}='${id}',{Event Type}='QUOTE READY',OR({Delivery Status}='Pending',{Delivery Status}='Sent'))`;
   const url = new URL(`${AIRTABLE_API}/${encodeURIComponent(settings.baseId)}/${encodeURIComponent(settings.communicationLogTable)}`);
   url.searchParams.set("filterByFormula", formula);
   url.searchParams.set("maxRecords", "10");
@@ -145,6 +145,19 @@ async function createQuoteReadyLog(input, options = {}) {
   });
 }
 
+async function updateCommunicationLog(recordId, fields, options = {}) {
+  const settings = { ...config(), ...options };
+  const id = clean(recordId);
+  if (!settings.token || !settings.baseId) throw new Error("Airtable is not configured");
+  if (!id || !/^rec[a-zA-Z0-9]+$/.test(id)) throw new Error("A valid Communication Log record ID is required");
+  const url = `${AIRTABLE_API}/${encodeURIComponent(settings.baseId)}/${encodeURIComponent(settings.communicationLogTable)}`;
+  return airtableJson(url, {
+    token: settings.token,
+    method: "PATCH",
+    body: { records: [{ id, fields }] }
+  });
+}
+
 module.exports = {
   communicationKey,
   config,
@@ -152,5 +165,6 @@ module.exports = {
   findQuoteReadyDeliveries,
   getJob,
   mapJob,
-  quoteReadyLogFields
+  quoteReadyLogFields,
+  updateCommunicationLog
 };
