@@ -1,6 +1,6 @@
 # Airtable Automation Migration to Render
 
-Updated: 2026-09-02
+Updated: 2026-09-03
 
 ## Objective
 
@@ -29,9 +29,10 @@ Applying the Render candidate rules to the current records produced:
 | PROPERTY REVIEW NEEDED | 0 | No Quick Quote record currently matches the unsent + researched + manual-review combination. |
 | FOLLOW-UP | 15 | All 15 matching rows have 2024 quote/follow-up dates; they appear to be seeded historical records and must be reviewed before enabling live follow-up delivery. |
 
-The comparison confirms that the current Render shadow flags are not sending
-anything for NEW REQUEST, PROPERTY REVIEW, or FOLLOW-UP. QUOTE READY and
-approved client quotes remain on their already-tested Render delivery path.
+The comparison was captured before the cutover. Render now has all three
+per-workflow shadow flags disabled and the corresponding send flags enabled.
+QUOTE READY and approved client quotes remain on their already-tested Render
+delivery path.
 
 To prevent the historical rows from being revived during a later cutover,
 Render now applies `FOLLOW_UP_MAX_AGE_DAYS` to the quote-sent date. It is set
@@ -81,17 +82,29 @@ Required top labels:
 7. Stamp the Jobs record only after delivery succeeds.
 8. Record failures without marking the workflow complete so retries are safe.
 
-Render now has staged, disabled-by-default replacements for `NEW REQUEST`,
-`PROPERTY REVIEW NEEDED`, and the daily `FOLLOW-UP` digest. They use the same
+Render now has live replacements for `NEW REQUEST`, `PROPERTY REVIEW NEEDED`,
+and the daily `FOLLOW-UP` digest. They use the same
 Communication Log reservation pattern as the existing QUOTE READY and client
 quote senders. Preview them with the protected
 `GET /api/airtable/workflow-preview?workflow=...` endpoint before enabling any
 flag. The preview is read-only and does not send mail or modify Jobs records.
 
+### 2026-09-03 cutover status
+
+Render is live for NEW REQUEST, PROPERTY REVIEW NEEDED, and FOLLOW-UP. The
+corresponding Airtable sender automations are still configured as a reversible
+rollback path. Pause (do not delete) the NEW REQUEST automation, both PROPERTY
+REVIEW automations (No Match and Needs Manual Review), and the daily FOLLOW-UP
+automation in Airtable after Anna signs into the Automations UI and confirms
+Render delivery. QUOTE READY, approved client quote, and note-translation
+automations remain available while their Render equivalents are verified.
+
 The note-translation automation remains deliberately unchanged for now. Its
 AI rewrite needs a separately selected model/provider and an explicit comparison
 against the current Airtable output before Render writes `Quote Calculation
-Notes`.
+Notes`. Client confirmations and reminders likewise remain on their existing
+Airtable paths until their exact trigger/state contract is documented and a
+Render sender has passed a controlled test.
 
 The scheduled follow-up job must run at 8:00 AM America/Los_Angeles and must
 not send an empty digest.

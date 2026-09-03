@@ -6,7 +6,7 @@ Updated: 2026-09-03
 
 - Repository: `annaellison83/floor-plan-drawings`
 - Branch: `main`
-- Latest synced commit: `04a9603` (`default follow-up age guard when unset`)
+- Latest synced commit: `69c5cbc` (`align handoff with live feature flags`)
 - Netlify website and functions remain live. Airtable remains the dashboard/source of truth. Render now sends the migrated QUOTE READY and approved-client quote emails.
 - Render service: `floorplan-drawings-backend` at `https://floor-plan-drawings.onrender.com`
 - Render settings: `npm install --prefix server`; `node server/index.js`; health path `/healthz`; Starter plan; auto-deploy from `main` enabled.
@@ -19,8 +19,10 @@ Updated: 2026-09-03
   does not create calendar events. Approved client quote emails do not include
   scheduling automatically yet (`ENABLE_CLIENT_QUOTE_SCHEDULING=false`).
 - Current Render migration flags: NEW REQUEST, PROPERTY REVIEW, and FOLLOW-UP
-  are in shadow mode; QUOTE READY and approved CLIENT QUOTE remain live on
-  Render; provisional holds and client scheduling remain disabled.
+  are live with per-workflow shadow flags false; QUOTE READY and approved
+  CLIENT QUOTE remain live on Render; provisional holds and client scheduling
+  remain disabled. The matching Airtable sender automations are retained as a
+  reversible rollback path until Anna pauses them in Airtable's Automations UI.
 - Render FOLLOW-UP candidates are limited by `FOLLOW_UP_MAX_AGE_DAYS=90` so
   the historical 2024 rows cannot be revived during cutover. Airtable data was
   not changed.
@@ -35,7 +37,12 @@ The approval page now saves edits with confirmation, records manually entered si
 
 For missing size, the system does not trust Google AI summaries or rental-unit descriptions as whole-building size. It provides Google, Zillow, Redfin, Realtor.com, and Homes.com search links for manual confirmation.
 
-Current resilience gap: the fallback Airtable QUOTE READY automation is disabled/undeployed, so it is a manual rollback path rather than an automatic second sender. A true mission-critical failover still needs an independently scheduled Airtable-sender fallback and a separate-channel alert when a record remains unsent.
+Current resilience gap: the fallback Airtable sender automations are retained for
+manual rollback, not as an automatic second sender. A true mission-critical
+failover still needs an independently scheduled Airtable-sender fallback and a
+separate-channel alert when a record remains unsent. Note translation, client
+confirmations, and reminders still require a documented Render state contract
+and controlled migration.
 
 ## Connector status
 
