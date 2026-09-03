@@ -17,6 +17,22 @@ Base: `Floor Plan Drawings Command Center` (`appBq1xl0G5vCegAH`)
 All seven automations are deployed and valid. Airtable reported no difference
 between the current draft and the deployed version for any automation.
 
+### 2026-09-03 read-only queue comparison
+
+The connected Airtable base was re-read without changing records or
+automations. It contains 56 Jobs records and 8 Communication Log records.
+Applying the Render candidate rules to the current records produced:
+
+| Render shadow workflow | Matching records | Observation |
+| --- | ---: | --- |
+| NEW REQUEST | 0 | No Order record currently has the exact `Anna Email Status = Not Sent` value. |
+| PROPERTY REVIEW NEEDED | 0 | No Quick Quote record currently matches the unsent + researched + manual-review combination. |
+| FOLLOW-UP | 15 | All 15 matching rows have 2024 quote/follow-up dates; they appear to be seeded historical records and must be reviewed before enabling live follow-up delivery. |
+
+The comparison confirms that the current Render shadow flags are not sending
+anything for NEW REQUEST, PROPERTY REVIEW, or FOLLOW-UP. QUOTE READY and
+approved client quotes remain on their already-tested Render delivery path.
+
 | Airtable automation | Trigger | Actions to reproduce on Render |
 | --- | --- | --- |
 | Notify Anna of new website request | Order + Anna Email Status `Not Sent` + property research complete | Send `NEW REQUEST`; create Communication Log row; set status `Sent - New Order` |
