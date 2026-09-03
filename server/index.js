@@ -666,6 +666,21 @@ async function buildTestQuote() {
   };
 }
 
+function buildTestFollowUp() {
+  const today = localDate();
+  return [{
+    recordId: "test-follow-up",
+    clientName: "Test Client",
+    clientEmail: "test-client@example.com",
+    clientPhone: "(555) 010-0142",
+    propertyAddress: "123 Test Street, Los Angeles, CA 90065",
+    service: "Color Interior + Exterior",
+    quoteSentDate: today,
+    followUpDate: today,
+    recordUrl: "https://airtable.com/"
+  }];
+}
+
 async function route(req, res) {
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
 
@@ -1022,6 +1037,24 @@ async function route(req, res) {
       return json(res, 200, { ok: true, test: true, recipient, ...delivery });
     } catch (error) {
       return json(res, 502, { error: "Test email delivery failed", detail: error.message });
+    }
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/email/test-follow-up") {
+    if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+    const recipient = clean(process.env.SMTP_USER);
+    if (!recipient) return json(res, 503, { error: "SMTP_USER is not configured" });
+    try {
+      const sample = followUpEmail(buildTestFollowUp(), localDate());
+      const delivery = await sendMail({
+        to: recipient,
+        subject: `[TEST — NO WORKFLOW] ${sample.subject}`,
+        html: sample.html,
+        text: sample.text
+      });
+      return json(res, 200, { ok: true, test: true, workflow: "FOLLOW-UP", recipient, ...delivery });
+    } catch (error) {
+      return json(res, 502, { error: "Follow-up test email delivery failed", detail: error.message });
     }
   }
 
