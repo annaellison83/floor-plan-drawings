@@ -109,6 +109,14 @@ function integrationStatus() {
     newRequestSendEnabled: newRequestEnabled(),
     propertyReviewSendEnabled: propertyReviewEnabled(),
     followUpSendEnabled: followUpEnabled(),
+    shadowMode: {
+      all: shadowEnabled("ALL"),
+      newRequest: shadowEnabled("NEW_REQUEST"),
+      propertyReview: shadowEnabled("PROPERTY_REVIEW"),
+      quoteReady: shadowEnabled("QUOTE_READY"),
+      clientQuote: shadowEnabled("CLIENT_QUOTE"),
+      followUp: shadowEnabled("FOLLOW_UP")
+    },
     appointmentProposalSendEnabled: appointmentProposalEnabled(),
     clientQuoteSchedulingEnabled: clientQuoteSchedulingEnabled(),
     deliveryAlertsEnabled: Boolean(clean(process.env.DELIVERY_ALERT_EMAIL)),
@@ -135,6 +143,20 @@ function propertyReviewEnabled() {
 
 function followUpEnabled() {
   return clean(process.env.ENABLE_FOLLOW_UP_SENDS).toLowerCase() === "true";
+}
+
+function shadowEnabled(workflow) {
+  const normalized = clean(workflow).toUpperCase();
+  const aliases = {
+    "NEW REQUEST": "NEW_REQUEST",
+    "PROPERTY REVIEW NEEDED": "PROPERTY_REVIEW",
+    "QUOTE READY": "QUOTE_READY",
+    "CLIENT QUOTE": "CLIENT_QUOTE",
+    "FOLLOW-UP": "FOLLOW_UP"
+  };
+  const key = aliases[normalized] || normalized.replace(/[^A-Z0-9]+/g, "_");
+  return clean(process.env.SHADOW_MODE).toLowerCase() === "true"
+    || clean(process.env[`SHADOW_${key}`]).toLowerCase() === "true";
 }
 
 function appointmentProposalEnabled() {
@@ -557,6 +579,9 @@ async function deliverQuoteReady(recordId) {
     }
     const job = await getJob(recordId);
     const email = quoteReadyEmail(job);
+    if (shadowEnabled("QUOTE_READY")) {
+      return { ok: true, shadow: true, status: 200, recordId, subject: email.subject, delivery: "not-sent" };
+    }
     const reservation = await createQuoteReadyLog({
       recordId,
       subject: email.subject,
@@ -628,6 +653,9 @@ async function deliverClientQuote(recordId) {
       }
     }
     const email = clientQuoteEmail(job, proposalUrl, proposalSlots);
+    if (shadowEnabled("CLIENT_QUOTE")) {
+      return { ok: true, shadow: true, status: 200, recordId, subject: email.subject, delivery: "not-sent" };
+    }
     const reservation = await createClientQuoteLog({
       recordId,
       clientName: job.clientName,
@@ -696,6 +724,9 @@ async function deliverInternalNotification(recordId, eventType, buildEmail, stat
     if (priorDeliveries.length) return { ok: false, status: 409, error: "Duplicate delivery blocked" };
     const job = await getJob(recordId);
     const email = buildEmail(job);
+    if (shadowEnabled(eventType)) {
+      return { ok: true, shadow: true, status: 200, recordId, eventType, subject: email.subject, delivery: "not-sent" };
+    }
     const reservation = await createNotificationLog({
       recordId,
       eventType,
@@ -773,6 +804,11 @@ async function pollFollowUps() {
       return;
     }
     const email = followUpEmail(jobs, today);
+    if (shadowEnabled("FOLLOW_UP")) {
+      followUpRunDate = today;
+      console.log(`FOLLOW-UP shadow run: ${jobs.length} candidate${jobs.length === 1 ? "" : "s"}; no email sent`);
+      return;
+    }
     const reservation = await createNotificationLog({
       recordId: "daily-follow-up",
       communication,

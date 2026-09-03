@@ -62,6 +62,13 @@ Anna can inspect the latest failed delivery records with the protected
 endpoint is read-only and returns only workflow, record, subject, status, and
 summary fields.
 
+Each workflow also has a shadow switch (`SHADOW_NEW_REQUEST`,
+`SHADOW_PROPERTY_REVIEW`, `SHADOW_QUOTE_READY`, `SHADOW_CLIENT_QUOTE`, or
+`SHADOW_FOLLOW_UP`). Shadow mode reads candidates and renders the message but
+does not create a Communication Log record, send mail, or update a Job. Use
+these switches to compare Render output with Airtable before cutting over one
+workflow at a time. `SHADOW_MODE=true` enables all of them together.
+
 Appointment options are intentionally test-only by default. Keep
 `ENABLE_APPOINTMENT_PROPOSALS=true` for Anna's internal board if desired, but
 leave `ENABLE_CLIENT_QUOTE_SCHEDULING=false` until client-facing scheduling is
