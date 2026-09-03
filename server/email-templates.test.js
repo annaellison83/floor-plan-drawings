@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { quotePricing, quoteReadyEmail } = require("./email-templates");
+const { clientQuoteEmail, quotePricing, quoteReadyEmail } = require("./email-templates");
 
 test("quote ready template escapes all dynamic HTML", () => {
   const rendered = quoteReadyEmail({
@@ -18,6 +18,20 @@ test("quote ready template escapes all dynamic HTML", () => {
   assert.match(rendered.html, /token=abc&amp;record=123/);
   assert.equal(rendered.subject, 'QUOTE READY | 349 Mount Washington <script>alert("x")</script>');
   assert.doesNotMatch(rendered.subject, /Review:/);
+});
+
+test("client quote email contains one approved amount and escapes client data", () => {
+  const email = clientQuoteEmail({
+    clientName: "A <script>",
+    propertyAddress: "123 Main St",
+    service: "Color Interior + Exterior",
+    scope: "Main house",
+    finalQuote: 365
+  });
+  assert.equal(email.subject, "Your floor plan quote - 123 Main St");
+  assert.match(email.html, /\$365/);
+  assert.doesNotMatch(email.html, /<script>/);
+  assert.match(email.text, /Quote: \$365/);
 });
 
 test("quote ready template is wide on desktop and stacks on mobile", () => {

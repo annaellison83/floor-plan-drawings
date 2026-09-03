@@ -2,11 +2,14 @@ const http = require("node:http");
 const { discoverCalendars } = require("./icloud");
 const { buildRoster } = require("./calendar-roster");
 const { isSmtpConfigured, sendMail, verifySmtp } = require("./mail");
-const { quoteReadyEmail } = require("./email-templates");
+const { clientQuoteEmail, quoteReadyEmail } = require("./email-templates");
 const {
+  createClientQuoteLog,
   createQuoteReadyLog,
+  findClientQuoteDeliveries,
   findQuoteReadyDeliveries,
   getJob,
+  listApprovedQuoteCandidates,
   listQuoteReadyCandidates,
   updateCommunicationLog,
   updateJob
@@ -24,7 +27,9 @@ const TEST_PROPERTY_ADDRESSES = [
   "2750 Medlow Ave, Los Angeles, CA 90065"
 ];
 const quoteReadyLocks = new Set();
+const clientQuoteLocks = new Set();
 let quoteReadyPollRunning = false;
+let clientQuotePollRunning = false;
 
 function clean(value) {
   return value === undefined || value === null ? "" : String(value).trim();
@@ -63,12 +68,26 @@ function integrationStatus() {
     icloud: Boolean(process.env.ICLOUD_EMAIL && process.env.ICLOUD_APP_PASSWORD),
     googleMaps: Boolean(process.env.GOOGLE_MAPS_STATIC_KEY || process.env.GOOGLE_MAPS_SERVER_KEY),
     postgres: Boolean(process.env.DATABASE_URL),
-    quoteReadySendEnabled: clean(process.env.ENABLE_QUOTE_READY_SENDS).toLowerCase() === "true"
+    quoteReadySendEnabled: clean(process.env.ENABLE_QUOTE_READY_SENDS).toLowerCase() === "true",
+    clientQuoteSendEnabled: clean(process.env.ENABLE_CLIENT_QUOTE_SENDS).toLowerCase() === "true"
   };
 }
 
 function quoteReadyEnabled() {
   return clean(process.env.ENABLE_QUOTE_READY_SENDS).toLowerCase() === "true";
+}
+
+function clientQuoteEnabled() {
+  return clean(process.env.ENABLE_CLIENT_QUOTE_SENDS).toLowerCase() === "true";
+}
+
+function localDate() {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Los_Angeles",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(new Date());
 }
 
 async function deliverQuoteReady(recordId) {
@@ -127,6 +146,74 @@ async function pollQuoteReady() {
     console.error(`QUOTE READY poll failed: ${error.message}`);
   } finally {
     quoteReadyPollRunning = false;
+  }
+}
+
+async function deliverClientQuote(recordId) {
+  if (clientQuoteLocks.has(recordId)) return { ok: false, status: 409, error: "Delivery already in progress" };
+  clientQuoteLocks.add(recordId);
+  let logRecordId = "";
+  try {
+    const priorDeliveries = await findClientQuoteDeliveries(recordId);
+    if (priorDeliveries.length) return { ok: false, status: 409, error: "Duplicate delivery blocked" };
+    const job = await getJob(recordId);
+    if (!job.clientEmail) throw new Error("Client Email is missing");
+    if (!Number.isFinite(Number(job.finalQuote)) || Number(job.finalQuote) <= 0) throw new Error("Approved quote amount is missing");
+    const email = clientQuoteEmail(job);
+    const reservation = await createClientQuoteLog({
+      recordId,
+      clientName: job.clientName,
+      subject: email.subject,
+      status: "Pending",
+      summary: `Reserved by Render for ${job.clientName || "client"}`
+    });
+    logRecordId = reservation.records && reservation.records[0] && reservation.records[0].id;
+    if (!logRecordId) throw new Error("Airtable did not return the reserved Communication Log ID");
+    const delivery = await sendMail({
+      to: job.clientEmail,
+      replyTo: clean(process.env.SMTP_USER),
+      subject: email.subject,
+      html: email.html,
+      text: email.text
+    });
+    const sentAt = new Date().toISOString();
+    await updateCommunicationLog(logRecordId, {
+      "Delivery Status": "Sent",
+      Summary: `Client quote email sent by Render. Property: ${job.propertyAddress}. Service: ${job.service}. Quote: ${job.finalQuote}.`
+    });
+    await updateJob(recordId, {
+      Status: "Quote Sent",
+      "Client Response": "Awaiting Reply",
+      "Quote Sent Date": localDate(),
+      "Approval Email Sent At": sentAt
+    });
+    return { ok: true, status: 200, recordId, logRecordId, delivery: "sent", accepted: delivery.accepted };
+  } catch (error) {
+    if (logRecordId) {
+      await updateCommunicationLog(logRecordId, {
+        "Delivery Status": "Failed",
+        Summary: `Render client quote delivery failed: ${error.message}`
+      }).catch(() => {});
+    }
+    return { ok: false, status: 502, error: "Client quote delivery failed", detail: error.message };
+  } finally {
+    clientQuoteLocks.delete(recordId);
+  }
+}
+
+async function pollClientQuotes() {
+  if (!clientQuoteEnabled() || clientQuotePollRunning) return;
+  clientQuotePollRunning = true;
+  try {
+    const candidates = await listApprovedQuoteCandidates();
+    for (const candidate of candidates) {
+      const result = await deliverClientQuote(candidate.id);
+      console.log(`CLIENT QUOTE poll ${candidate.id}: ${result.ok ? "sent" : result.error}`);
+    }
+  } catch (error) {
+    console.error(`CLIENT QUOTE poll failed: ${error.message}`);
+  } finally {
+    clientQuotePollRunning = false;
   }
 }
 
@@ -319,6 +406,13 @@ async function route(req, res) {
     return json(res, result.status, result);
   }
 
+  if (req.method === "POST" && url.pathname === "/api/airtable/send-client-quote") {
+    if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+    if (!clientQuoteEnabled()) return json(res, 503, { error: "Client quote sending is disabled" });
+    const result = await deliverClientQuote(clean(url.searchParams.get("recordId")));
+    return json(res, result.status, result);
+  }
+
   return json(res, 404, { error: "Not found" });
 }
 
@@ -332,4 +426,6 @@ server.listen(PORT, "0.0.0.0", () => {
   console.log(`${SERVICE_NAME} listening on ${PORT}`);
   setTimeout(pollQuoteReady, 5000).unref();
   setInterval(pollQuoteReady, Number(process.env.QUOTE_READY_POLL_MS) || 60000).unref();
+  setTimeout(pollClientQuotes, 8000).unref();
+  setInterval(pollClientQuotes, Number(process.env.CLIENT_QUOTE_POLL_MS) || 60000).unref();
 });

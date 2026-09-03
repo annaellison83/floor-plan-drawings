@@ -31,6 +31,7 @@ function mapJob(record, options = {}) {
     clientEmail: first(fields, ["Client Email", "Email"]),
     clientPhone: first(fields, ["Client Phone", "Phone"]),
     service: first(fields, ["Drawing Style", "Service Requested", "Service"]),
+    scope: first(fields, ["Scope", "Unit / Suite / Scope Detail"]),
     workflow: first(fields, ["Website Workflow", "Workflow", "Request Type"]) || "Quick Quote",
     status: first(fields, ["Status"]),
     quoteZone: first(fields, ["Quote Zone", "Zone"]),
@@ -39,6 +40,7 @@ function mapJob(record, options = {}) {
     verifiedSqFt: first(fields, ["Verified Sq Ft", "Verified Square Feet"]),
     approxSqFt: first(fields, ["Approx Sq Ft", "Approx Square Feet", "Square Footage"]),
     suggestedQuote: first(fields, ["Suggested Quote", "Quote Amount"]),
+    finalQuote: first(fields, ["Quote Amount", "Final Quote Preview", "Suggested Quote"]),
     quoteNotes: first(fields, ["Quote Calculation Notes", "Quote Notes"]),
     tourRequested: yesNo(first(fields, ["3D Tour Requested", "3D Tour"])),
     mapUrl: first(fields, ["Aerial Map URL", "Aerial URL"]),
@@ -79,6 +81,19 @@ function quoteReadyLogFields({ recordId, subject, status = "Pending", summary = 
     "Email Subject": clean(subject),
     "Delivery Status": status,
     Summary: clean(summary)
+  };
+}
+
+function clientQuoteLogFields({ recordId, clientName, subject, status = "Pending", summary = "" }) {
+  return {
+    Communication: communicationKey(recordId, "approved_quote"),
+    "Job Record ID": clean(recordId),
+    Direction: "Outgoing",
+    Channel: "Email",
+    "Event Type": "Quote Sent",
+    "Email Subject": clean(subject),
+    "Delivery Status": status,
+    Summary: clean(summary) || `Client quote reserved for ${clean(clientName) || "client"}`
   };
 }
 
@@ -146,6 +161,31 @@ async function listQuoteReadyCandidates(options = {}) {
   return body.records || [];
 }
 
+async function findClientQuoteDeliveries(recordId, options = {}) {
+  const settings = { ...config(), ...options };
+  const id = clean(recordId);
+  if (!settings.token || !settings.baseId) throw new Error("Airtable is not configured");
+  if (!id || !/^rec[a-zA-Z0-9]+$/.test(id)) throw new Error("A valid Airtable record ID is required");
+  const formula = `AND({Job Record ID}='${id}',{Event Type}='Quote Sent',OR({Delivery Status}='Pending',{Delivery Status}='Sent'))`;
+  const url = new URL(`${AIRTABLE_API}/${encodeURIComponent(settings.baseId)}/${encodeURIComponent(settings.communicationLogTable)}`);
+  url.searchParams.set("filterByFormula", formula);
+  url.searchParams.set("maxRecords", "10");
+  const body = await airtableJson(url.href, { token: settings.token });
+  return body.records || [];
+}
+
+async function listApprovedQuoteCandidates(options = {}) {
+  const settings = { ...config(), ...options };
+  if (!settings.token || !settings.baseId) throw new Error("Airtable is not configured");
+  const formula = "AND({Website Workflow}='Quick Quote',{Anna Decision}='Approved',{Quote Sent Date}=BLANK(),{Client Email}!='')";
+  const table = settings.jobsTableId || settings.jobsTable;
+  const url = new URL(`${AIRTABLE_API}/${encodeURIComponent(settings.baseId)}/${encodeURIComponent(table)}`);
+  url.searchParams.set("filterByFormula", formula);
+  url.searchParams.set("maxRecords", "10");
+  const body = await airtableJson(url.href, { token: settings.token });
+  return body.records || [];
+}
+
 async function createQuoteReadyLog(input, options = {}) {
   const settings = { ...config(), ...options };
   if (!settings.token || !settings.baseId) throw new Error("Airtable is not configured");
@@ -154,6 +194,17 @@ async function createQuoteReadyLog(input, options = {}) {
     token: settings.token,
     method: "POST",
     body: { records: [{ fields: quoteReadyLogFields(input) }], typecast: false }
+  });
+}
+
+async function createClientQuoteLog(input, options = {}) {
+  const settings = { ...config(), ...options };
+  if (!settings.token || !settings.baseId) throw new Error("Airtable is not configured");
+  const url = `${AIRTABLE_API}/${encodeURIComponent(settings.baseId)}/${encodeURIComponent(settings.communicationLogTable)}`;
+  return airtableJson(url, {
+    token: settings.token,
+    method: "POST",
+    body: { records: [{ fields: clientQuoteLogFields(input) }], typecast: false }
   });
 }
 
@@ -185,11 +236,15 @@ async function updateJob(recordId, fields, options = {}) {
 }
 
 module.exports = {
+  clientQuoteLogFields,
   communicationKey,
   config,
+  createClientQuoteLog,
   createQuoteReadyLog,
+  findClientQuoteDeliveries,
   findQuoteReadyDeliveries,
   getJob,
+  listApprovedQuoteCandidates,
   listQuoteReadyCandidates,
   mapJob,
   quoteReadyLogFields,

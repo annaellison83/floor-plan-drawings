@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { communicationKey, mapJob, quoteReadyLogFields } = require("./airtable");
+const { clientQuoteLogFields, communicationKey, mapJob, quoteReadyLogFields } = require("./airtable");
 
 test("maps a Jobs record without exposing credentials", () => {
   const job = mapJob({
@@ -28,6 +28,17 @@ test("maps a Jobs record without exposing credentials", () => {
   assert.match(job.recordUrl, /rec08dRgUXUMPajMt$/);
   assert.match(job.approvalUrl, /recordId=rec08dRgUXUMPajMt&token=approval-secret$/);
   assert.equal("token" in job, false);
+});
+
+test("builds an approved-client quote log payload", () => {
+  const fields = clientQuoteLogFields({
+    recordId: "rec08dRgUXUMPajMt",
+    clientName: "Eric",
+    subject: "Your floor plan quote - 123 Main St"
+  });
+  assert.equal(fields.Communication, "rec08dRgUXUMPajMt:approved_quote:v1");
+  assert.equal(fields["Event Type"], "Quote Sent");
+  assert.equal(fields["Delivery Status"], "Pending");
 });
 
 test("supports field-name fallbacks", () => {

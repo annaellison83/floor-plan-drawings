@@ -102,4 +102,16 @@ body{margin:0!important;padding:0!important;background:#f3f1eb;color:#22332e;fon
   return { subject, html, text: plainText };
 }
 
-module.exports = { escapeHtml, quotePricing, quoteReadyEmail, safeUrl };
+function clientQuoteEmail(job) {
+  const name = text(job.clientName, "there");
+  const address = text(job.propertyAddress);
+  const service = text(job.service, "Floor plan drawing");
+  const scope = text(job.scope, "As requested");
+  const quote = money(job.finalQuote);
+  const subject = `Your floor plan quote - ${address}`;
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0;padding:0;background:#f3f1eb;color:#22332e;font-family:Arial,Helvetica,sans-serif;"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f3f1eb;"><tr><td style="padding:24px 12px;"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:680px;margin:0 auto;background:#fbf8f1;border:1px solid #ddd7ca;border-radius:18px;"><tr><td style="padding:38px 32px;"><div style="color:#53635c;font-size:12px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;">FloorPlanDrawings</div><h1 style="margin:14px 0 18px;font-size:30px;line-height:38px;color:#173f36;">Your floor plan quote</h1><p style="font-size:16px;line-height:25px;margin:0 0 20px;">Hi ${escapeHtml(name)},</p><p style="font-size:16px;line-height:25px;margin:0 0 22px;">Thanks for reaching out to FloorPlanDrawings. Anna reviewed your request and approved the following quote.</p><div style="background:#b8c9ae;border-radius:14px;padding:24px;"><div style="font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#53635c;">Property</div><div style="margin-top:8px;font-size:22px;line-height:30px;font-weight:700;">${escapeHtml(address)}</div><div style="margin-top:16px;font-size:15px;line-height:24px;"><strong>Service:</strong> ${escapeHtml(service)}<br><strong>Scope:</strong> ${escapeHtml(scope)}</div><div style="margin-top:20px;font-size:34px;line-height:40px;font-weight:700;color:#173f36;">${escapeHtml(quote)}</div></div><p style="font-size:16px;line-height:25px;margin:24px 0 0;">If you would like to move forward, reply to this email with your preferred appointment day/time and access details. We will confirm the appointment after we hear back.</p><p style="font-size:16px;line-height:25px;margin:24px 0 0;">Thank you,<br>FloorPlanDrawings</p></td></tr></table></td></tr></table></body></html>`;
+  const plainText = [`Hi ${name},`, "Thanks for reaching out to FloorPlanDrawings. Anna reviewed your request and approved the following quote.", `Property: ${address}`, `Service: ${service}`, `Scope: ${scope}`, `Quote: ${quote}`, "If you would like to move forward, reply to this email with your preferred appointment day/time and access details. We will confirm the appointment after we hear back.", "Thank you,\nFloorPlanDrawings"].join("\n\n");
+  return { subject, html, text: plainText };
+}
+
+module.exports = { clientQuoteEmail, escapeHtml, quotePricing, quoteReadyEmail, safeUrl };
