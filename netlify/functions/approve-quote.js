@@ -50,6 +50,20 @@ function approvalPage(recordId, token, fields, notice = "") {
   };
 }
 
+function savedPage(recordId, token, fields) {
+  const address = fields["Property Address"] || "this property";
+  const quote = fields["Quote Amount"] || fields["Suggested Quote"] || "";
+  const zone = fields["Quote Zone"] || "Needs review";
+  const service = fields["Drawing Style"] || "Requested floor plan";
+  const sqFt = fields["Verified Sq Ft"] || "";
+  const action = `/.netlify/functions/approve-quote?recordId=${encodeURIComponent(recordId)}&amp;token=${encodeURIComponent(token)}`;
+  return {
+    statusCode: 200,
+    headers: HTML_HEADERS,
+    body: `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Changes saved | FloorPlanDrawings</title></head><body style="margin:0;background:#F5F1E8;color:#22261F;font-family:Helvetica,Arial,sans-serif;"><main style="max-width:680px;margin:8vh auto;padding:40px 28px;background:#fff;border:1px solid #DCD7C9;border-radius:14px;box-shadow:0 8px 30px rgba(34,38,31,.08);"><div style="font-size:11px;font-weight:bold;letter-spacing:2px;text-transform:uppercase;color:#6B6B5F;">FloorPlanDrawings / internal review</div><div style="margin:18px 0;padding:14px 16px;background:#E4F1DE;border:1px solid #9FBC91;border-radius:8px;color:#1F3A34;font-size:17px;font-weight:bold;">✓ Changes saved to Airtable</div><h1 style="font-size:30px;line-height:38px;margin:20px 0 12px;">Nothing has been sent yet.</h1><p style="font-size:17px;line-height:27px;color:#4A4A40;margin:0 0 24px;">Review the saved details below, then continue editing or approve the quote.</p><div style="background:#B4C4AA;border-radius:10px;padding:20px 22px;margin-bottom:24px;"><strong style="font-size:20px;line-height:28px;">${escapeHtml(address)}</strong><div style="margin-top:10px;line-height:25px;color:#3D5348;">$${escapeHtml(quote)} &middot; ${escapeHtml(zone)}<br>${escapeHtml(service)}${sqFt ? ` &middot; ${escapeHtml(sqFt)} sq ft` : ""}</div></div><div style="display:flex;flex-wrap:wrap;gap:12px;"><a href="${action}" style="display:inline-block;border:1px solid #1F3A34;border-radius:8px;background:#fff;color:#1F3A34;text-decoration:none;font-size:16px;line-height:22px;font-weight:bold;padding:14px 20px;">Continue editing</a><form method="post" action="${action}" style="margin:0;"><input type="hidden" name="quoteAmount" value="${escapeHtml(quote)}"><input type="hidden" name="quoteZone" value="${escapeHtml(fields["Quote Zone"] || "")}"><input type="hidden" name="drawingStyle" value="${escapeHtml(service)}"><input type="hidden" name="verifiedSqFt" value="${escapeHtml(sqFt)}"><button type="submit" name="action" value="approve" style="border:0;border-radius:8px;background:#1F3A34;color:#F5F1E8;font-size:16px;line-height:22px;font-weight:bold;padding:15px 22px;cursor:pointer;">Approve quote and send to client</button></form></div></main></body></html>`
+  };
+}
+
 function parseEdits(event) {
   const body = new URLSearchParams(event.body || "");
   const quoteAmount = Number(body.get("quoteAmount"));
@@ -152,7 +166,7 @@ exports.handler = async (event) => {
         method: "PATCH",
         body: JSON.stringify({ fields: edits.fields, typecast: true })
       });
-      return approvalPage(recordId, providedToken, { ...fields, ...edits.fields }, "Changes saved to Airtable. Nothing has been sent yet.");
+      return savedPage(recordId, providedToken, { ...fields, ...edits.fields });
     }
 
     if (edits.action !== "approve") {
