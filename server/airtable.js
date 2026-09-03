@@ -76,6 +76,11 @@ function config(env = process.env) {
     jobsTable: clean(env.AIRTABLE_JOBS_TABLE) || "Jobs",
     jobsTableId: clean(env.AIRTABLE_JOBS_TABLE_ID),
     communicationLogTable: clean(env.AIRTABLE_COMMUNICATION_LOG_TABLE) || "Communication Log",
+    // Prevent a Render cutover from reviving indefinitely stale follow-ups.
+    // Set to 0 to preserve the legacy unbounded Airtable rule.
+    followUpMaxAgeDays: Number.isFinite(Number(env.FOLLOW_UP_MAX_AGE_DAYS))
+      ? Math.max(0, Math.floor(Number(env.FOLLOW_UP_MAX_AGE_DAYS)))
+      : 90,
     approvalBaseUrl: clean(env.QUOTE_APPROVAL_URL),
     proposalReviewBaseUrl: clean(env.PROPOSAL_REVIEW_BASE_URL) || "https://floor-plan-drawings.onrender.com/api/scheduling/proposal/start"
   };
@@ -288,7 +293,13 @@ async function listPropertyReviewCandidates(options = {}) {
 async function listFollowUpCandidates(options = {}) {
   const settings = { ...config(), ...options };
   if (!settings.token || !settings.baseId) throw new Error("Airtable is not configured");
-  const formula = "AND({Quote Sent Date}!='',{Follow-Up Date}!='',{Follow-Up Date}<=TODAY(),OR({Client Response}='Awaiting Reply',{Client Response}='No Response',{Client Response}=''))";
+  const maxAgeDays = Number.isFinite(Number(settings.followUpMaxAgeDays))
+    ? Math.max(0, Math.floor(Number(settings.followUpMaxAgeDays)))
+    : 90;
+  const ageGuard = maxAgeDays > 0
+    ? `,IS_AFTER({Quote Sent Date},DATEADD(TODAY(),-${maxAgeDays},'days'))`
+    : "";
+  const formula = `AND({Quote Sent Date}!='',{Follow-Up Date}!='',{Follow-Up Date}<=TODAY(),OR({Client Response}='Awaiting Reply',{Client Response}='No Response',{Client Response}='')${ageGuard})`;
   const table = settings.jobsTableId || settings.jobsTable;
   const url = new URL(`${AIRTABLE_API}/${encodeURIComponent(settings.baseId)}/${encodeURIComponent(table)}`);
   url.searchParams.set("filterByFormula", formula);

@@ -33,6 +33,10 @@ The comparison confirms that the current Render shadow flags are not sending
 anything for NEW REQUEST, PROPERTY REVIEW, or FOLLOW-UP. QUOTE READY and
 approved client quotes remain on their already-tested Render delivery path.
 
+To prevent the historical rows from being revived during a later cutover,
+Render now applies `FOLLOW_UP_MAX_AGE_DAYS` to the quote-sent date. It is set
+to 90 days in Render; setting it to `0` restores the legacy unbounded rule.
+
 | Airtable automation | Trigger | Actions to reproduce on Render |
 | --- | --- | --- |
 | Notify Anna of new website request | Order + Anna Email Status `Not Sent` + property research complete | Send `NEW REQUEST`; create Communication Log row; set status `Sent - New Order` |
@@ -133,6 +137,7 @@ Secrets belong in Render, not GitHub:
 - `AIRTABLE_COMMUNICATION_LOG_TABLE=Communication Log`
 - Mail-provider credentials (provider still to be selected)
 - `INTERNAL_ADMIN_TOKEN` (already configured)
+- `FOLLOW_UP_MAX_AGE_DAYS=90` (Render safety guard for stale historical rows)
 
 Workflow flags remain false until each replacement has passed shadow-run and
 duplicate checks:

@@ -21,6 +21,9 @@ Updated: 2026-09-03
 - Current Render migration flags: NEW REQUEST, PROPERTY REVIEW, and FOLLOW-UP
   are in shadow mode; QUOTE READY and approved CLIENT QUOTE remain live on
   Render; provisional holds and client scheduling remain disabled.
+- Render FOLLOW-UP candidates are limited by `FOLLOW_UP_MAX_AGE_DAYS=90` so
+  the historical 2024 rows cannot be revived during cutover. Airtable data was
+  not changed.
 - Provisional hold create/release endpoints are staged behind `ENABLE_PROVISIONAL_HOLDS=false`; no event writes have been enabled.
 - No calendar events were created or modified.
 
