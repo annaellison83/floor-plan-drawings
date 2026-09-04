@@ -6,10 +6,19 @@ Updated: 2026-09-03
 
 - Repository: `annaellison83/floor-plan-drawings`
 - Branch: `main`
-- Latest synced commit: `f7f8f1b` (`record Render workflow cutover`)
-- Netlify website and functions remain live. Airtable remains the dashboard/source of truth. Render now sends the migrated QUOTE READY and approved-client quote emails.
+- Latest synced commit: `39aa44d` (`sync handoff after workflow cutover`)
+- `main` and the controlled `release` branch both point to `39aa44d`.
+- Airtable remains the dashboard/source of truth. Render sends the migrated
+  workflow emails. Netlify's team is currently over its credit limit, so the
+  `floorplandrawings.com` project and new deploys are paused until credits are
+  restored or the next billing cycle; no Netlify deploy test can pass while it
+  is paused.
 - Render service: `floorplan-drawings-backend` at `https://floor-plan-drawings.onrender.com`
 - Render settings: `npm install --prefix server`; `node server/index.js`; health path `/healthz`; Starter plan; auto-deploy from `main` enabled.
+- Netlify production is intentionally configured to the `release` branch;
+  branch deploys are enabled for all pushed branches and pull-request
+  previews remain enabled. Develop on `main`, review a preview, then merge or
+  push `release` for an intentional production release after credits return.
 - Render health is passing with Airtable, Gmail SMTP, and iCloud integrations enabled. Gmail SMTP is the primary sender and the configured alternate SMTP path is available for bounded fallback delivery.
 - Protected read-only iCloud discovery and roster endpoints are live. The roster classifies `anna` as owner, `corrie`, `sarah`, and `ricardo` as workers, and excludes `Home` and `Reminders`.
 - Read-only worker availability is live at `/api/icloud/availability`; the dry-run planner is live at `/api/icloud/appointments/dry-run`.
@@ -54,16 +63,21 @@ and controlled migration.
   Render's candidate rules currently find 0 NEW REQUEST, 0 PROPERTY REVIEW,
   and 15 historical FOLLOW-UP rows (the latter are seeded 2024 records and
   should be reviewed before any cutover).
-- Netlify CLI authentication is verified as Anna on the `FPD` team, and this checkout is linked to the existing `floorplandrawings` site. Production deploys are Git-triggered.
+- The Netlify dashboard is linked to the existing `floorplandrawings` site and
+  the production branch guardrail is configured as above. The dashboard shows
+  the team over its credit limit; defer deploy verification until access is
+  restored.
 - The Airtable and Netlify Codex plugins are installed. Their in-app OAuth connectors are separate from the verified CLI sessions.
 
 ## Next safe steps
 
-1. Add an automatic, delayed Airtable-sender fallback for QUOTE READY after a Render/Gmail failure, with an idempotent claim field.
-2. Add a separate-channel alert for jobs that remain unsent beyond the retry window.
-3. Keep the current disabled Airtable QUOTE READY flow available as a manual rollback until the independent fallback is tested.
-4. Finish the iCloud custom-domain DNS cutover only after deciding whether Bluehost will continue hosting DNS.
-5. Review the first real appointment proposal end-to-end. Client selections
+1. Restore Netlify deploy access (purchase credits or wait for the billing
+   reset) before attempting a production deploy or testing Netlify functions.
+2. Add an automatic, delayed Airtable-sender fallback for QUOTE READY after a Render/Gmail failure, with an idempotent claim field.
+3. Add a separate-channel alert for jobs that remain unsent beyond the retry window.
+4. Keep the current disabled Airtable QUOTE READY flow available as a manual rollback until the independent fallback is tested.
+5. Finish the iCloud custom-domain DNS cutover only after deciding whether Bluehost will continue hosting DNS.
+6. Review the first real appointment proposal end-to-end. Client selections
    are logged for Anna while holds remain disabled; enable provisional holds
    only after the selection and rollback path are approved.
 
