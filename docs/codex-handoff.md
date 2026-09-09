@@ -6,7 +6,7 @@ Updated: 2026-09-08
 
 - Repository: `annaellison83/floor-plan-drawings`
 - Branch: `main`
-- Latest synced commit: `5e91483` (`build Render workflow intake and Gmail runtime`)
+- Latest synced commit: `22f9b27` (`record provider activation and Gmail label rename`)
 - `main` contains the Render intake handoff, Gmail runtime, project state, and
   delivery-audit changes. The older `release` branch is not used for this
   staged backend cutover.
@@ -89,8 +89,9 @@ and controlled migration.
   should be reviewed before any cutover).
 - The Netlify dashboard is linked to the existing `floorplandrawings` site and
   the production branch guardrail is configured as above. The latest published
-  production deploy is `39aa44d`; the site returned HTTP 200 after credits were
-  restored.
+  production deploy is `39aa44d`; it was re-run after the shared intake token
+  was added so the live Functions receive the Netlify value. The site returned
+  HTTP 200 after credits were restored.
 - The Airtable and Netlify Codex plugins are installed. Their in-app OAuth connectors are separate from the verified CLI sessions.
 
 ## Next safe steps
