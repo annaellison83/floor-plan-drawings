@@ -26,8 +26,16 @@ Updated: 2026-09-08
   Airtable write retained as a fail-safe fallback.
 - A Gmail API intake runtime is implemented but intentionally disabled until
   Anna enters a separate least-privilege Google OAuth refresh token in Render.
-  It reads only the `[00] FPD Intake` label, preserves Gmail message/thread
+  It reads only the `[FPD] Intake` label, preserves Gmail message/thread
   IDs, and never assumes an unknown sender is the client.
+- Gmail's `NEW REQUEST` filter now applies `[FPD] Intake`; the existing label
+  was renamed in place so its label ID and filter behavior were preserved.
+- `RENDER_INTAKE_TOKEN` is now set identically in Netlify and Render. Render
+  has a 1 GB disk mounted at `/var/data`, with `STATE_FILE` set to
+  `/var/data/fpd-state.json`.
+- Render has `GMAIL_INTAKE_LABEL_ID=Label_29` configured for `[FPD] Intake`.
+  `ENABLE_GMAIL_INTAKE_POLL=false` is explicit until the first manual poll is
+  reviewed; Google OAuth client/refresh values are still intentionally absent.
 - Protected read-only iCloud discovery and roster endpoints are live. The roster classifies `anna` as owner, `corrie`, `sarah`, and `ricardo` as workers, and excludes `Home` and `Reminders`.
 - Read-only worker availability is live at `/api/icloud/availability`; the dry-run planner is live at `/api/icloud/appointments/dry-run`.
 - The internal appointment-proposal board is available for test-only use. Anna
@@ -87,14 +95,11 @@ and controlled migration.
 
 ## Next safe steps
 
-1. Set `RENDER_INTAKE_TOKEN` identically in Netlify and Render, then verify a
-   controlled website submission reaches `/api/intake`.
-2. Mount a persistent Render disk and set `STATE_FILE`; `/healthz` reports
-   `integrations.renderStateDurable=false` until this is done.
-3. Enter Google OAuth values directly in Render, set `GMAIL_INTAKE_LABEL_ID`
-   to the `[00] FPD Intake` label ID, and leave `ENABLE_GMAIL_INTAKE_POLL=false`
-   for the first manual poll. Turn on the timer only after that pass is
-   reviewed.
+1. Verify a controlled website submission reaches `/api/intake` using the
+   shared token, then confirm the Render state file survives a restart.
+2. Enter Google OAuth client ID, client secret, and least-privilege refresh
+   token directly in Render. Keep `ENABLE_GMAIL_INTAKE_POLL=false` for the
+   first manual poll; turn on the timer only after that pass is reviewed.
 4. Add an automatic, delayed Airtable-sender fallback for QUOTE READY after a Render/Gmail failure, with an idempotent claim field.
 5. Add a separate-channel alert for jobs that remain unsent beyond the retry window.
 6. Keep the current Airtable automations available as manual rollback until the independent fallback is tested.

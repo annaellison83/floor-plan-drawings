@@ -178,7 +178,7 @@ future inbound workflow. It uses a separately authorized OAuth refresh token
 (not the Codex Gmail connector and not an SMTP app password), reads only the
 configured intake label, preserves Gmail message and thread IDs, and exposes an
 idempotent processing hook. Configure `GMAIL_INTAKE_LABEL_ID` with the ID of
-`[00] FPD Intake`; do not use the display name as the ID.
+`[FPD] Intake`; do not use the display name as the ID.
 
 The parser keeps the sender (`contacts.source`) separate from
 `contacts.agent` and `contacts.client`. Only explicitly configured addresses
