@@ -260,7 +260,7 @@ function calendarAirtableSyncEnabled() {
 function calendarSyncRange(input = {}) {
   const startDate = clean(input.startDate) || shiftDate(localDate(), -Math.max(0, Math.min(30, Number(process.env.CALENDAR_SYNC_LOOKBACK_DAYS) || 7)));
   const days = Math.max(1, Math.min(90, Number(input.days) || Number(process.env.CALENDAR_SYNC_LOOKAHEAD_DAYS) || 60));
-  return { startDate, days, start: localDateTime(startDate, "00:00"), end: localDateTime(shiftDate(startDate, days), "00:00") };
+  return { startDate, days, start: new Date(`${startDate}T00:00:00Z`), end: new Date(`${shiftDate(startDate, days)}T00:00:00Z`) };
 }
 
 function airtableCalendarMatch(fields, records = []) {
