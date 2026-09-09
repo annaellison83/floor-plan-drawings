@@ -282,14 +282,24 @@ async function pollGmailIntake() {
   });
   // Re-enrich previously ingested Gmail projects after parser/config changes.
   // This is read-only against Gmail and only updates missing structured fields.
-  for (const project of projectState.listProjects({}).filter((item) => item.source === "gmail" && item.metadata && item.metadata.gmailMessageId && (!item.propertyAddress || !item.clientName))) {
+  const configuredAgents = new Set(client.config.agentEmails);
+  const configuredClients = new Set(client.config.clientEmails);
+  for (const project of projectState.listProjects({}).filter((item) => {
+    if (item.source !== "gmail" || !item.metadata || !item.metadata.gmailMessageId) return false;
+    const sourceEmail = clean(item.metadata.sourceEmail).toLowerCase();
+    const roleNeedsRefresh = (configuredAgents.has(sourceEmail) && !(item.contacts.agent || []).includes(sourceEmail))
+      || (configuredClients.has(sourceEmail) && !(item.contacts.client || []).includes(sourceEmail));
+    return !item.propertyAddress || !item.clientName || roleNeedsRefresh || Object.prototype.hasOwnProperty.call(item.metadata, "textSnippet");
+  })) {
     try {
       const raw = await client.getMessage(project.metadata.gmailMessageId);
       const parsed = parseGmailMessage(raw, { agentEmails: client.config.agentEmails, clientEmails: client.config.clientEmails });
+      const metadata = Object.fromEntries(Object.entries(project.metadata || {}).filter(([key]) => key !== "textSnippet"));
       projectState.upsertProject({
         ...project,
         propertyAddress: project.propertyAddress || parsed.propertyAddress,
         clientName: project.clientName || parsed.clientName,
+        metadata,
         contacts: {
           ...project.contacts,
           client: parsed.contacts.client.map((contact) => contact.email),
