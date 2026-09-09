@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { clientAvailabilityProposalEmail, clientQuoteEmail, quotePricing, quoteReadyEmail } = require("./email-templates");
+const { clientAppointmentConfirmationEmail, clientAppointmentReminderEmail, clientAvailabilityProposalEmail, clientQuoteEmail, quotePricing, quoteReadyEmail, newRequestEmail } = require("./email-templates");
 
 test("quote ready template escapes all dynamic HTML", () => {
   const rendered = quoteReadyEmail({
@@ -109,4 +109,41 @@ test("zone pricing uses the minimum as a floor, not an add-on", () => {
   assert.equal(zoneThree.basePrice, 200);
   assert.equal(zoneThree.finalPrice, 260);
   assert.equal(quotePricing({ quoteZone: "Zone 4", baseServiceQuote: 345 }).finalPrice, 345);
+});
+
+test("appointment lifecycle templates share the responsive branded styling", () => {
+  const job = {
+    clientName: "Eric <Greenburg>",
+    propertyAddress: "123 Main St, Los Angeles, CA",
+    service: "Color Interior + Exterior"
+  };
+  const appointment = {
+    start: "2026-09-15T18:00:00.000Z",
+    worker: "Corrie",
+    durationMinutes: 90,
+    accessNotes: "Gate code <unsafe>"
+  };
+  const confirmation = clientAppointmentConfirmationEmail(job, appointment);
+  const reminder = clientAppointmentReminderEmail(job, appointment, "Tomorrow");
+  assert.match(confirmation.subject, /^APPOINTMENT CONFIRMED \|/);
+  assert.match(reminder.subject, /^REMINDER \|/);
+  assert.match(confirmation.html, /APPOINTMENT CONFIRMED/);
+  assert.match(reminder.html, /Tomorrow: your appointment/);
+  assert.match(confirmation.html, /background:#b8c9ae/);
+  assert.match(confirmation.html, /@media only screen and \(max-width:640px\)/);
+  assert.match(confirmation.html, /Gate code &lt;unsafe&gt;/);
+  assert.doesNotMatch(confirmation.html, /<unsafe>/);
+  assert.match(confirmation.text, /Team member: Corrie/);
+});
+
+test("Gmail intake notification can link back to the source thread", () => {
+  const email = newRequestEmail({
+    clientName: "Incoming agent",
+    clientEmail: "agent@example.com",
+    propertyAddress: "123 Main St, Los Angeles, CA",
+    service: "Black and white floor plan",
+    gmailThreadUrl: "https://mail.google.com/mail/u/0/#all/thread-123"
+  });
+  assert.match(email.html, /Open Gmail thread/);
+  assert.match(email.text, /Gmail thread:/);
 });

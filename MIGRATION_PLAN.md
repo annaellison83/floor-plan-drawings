@@ -34,6 +34,12 @@ disabled as part of the preparatory work.
    per-workflow shadow flags false. Their Airtable sender automations remain
    intact as a reversible rollback path and must be paused (not deleted) in
    Airtable after Anna confirms Render delivery.
+12. Render now has a durable project-progress timeline, idempotent appointment
+    confirmation/reminder delivery routes, and responsive client templates. The
+    confirmation/reminder flags remain disabled until a controlled test is
+    reviewed. Gmail intake can optionally send Anna an internal-only quote-style
+    review email with a Gmail-thread link after `ENABLE_GMAIL_INTAKE_NOTIFICATIONS`
+    is enabled.
 
 ## Execution order
 

@@ -195,6 +195,32 @@ to run the same pass every two minutes (or set `GMAIL_INTAKE_POLL_MS`).
 Optionally set `GMAIL_PROCESSED_LABEL_ID` to add a separate processed label;
 the intake label is never removed automatically.
 
+Set `ENABLE_GMAIL_INTAKE_NOTIFICATIONS=true` only after reviewing one manual
+poll. For each labeled message with an extracted property address, Render then
+sends Anna an internal-only `NEW REQUEST` email using the same responsive quote
+layout and includes an **Open Gmail thread** link. The message is addressed only
+to `SMTP_USER`; the sender and client are never copied or blind-copied. Render
+also supplies Gmail `In-Reply-To`/`References` headers when available, so Gmail
+can group the review with the original thread while keeping the quote details
+private. Messages without an address remain in the Render project queue for
+manual review and do not generate a client-facing message.
+
+Render tracks job progress with the protected endpoint
+`POST /api/ops/projects/:id/progress`. Send a small JSON body such as
+`{"stage":"scheduled","status":"scheduled","note":"Client selected a time"}`;
+each change is durable (when `STATE_FILE` is mounted) and creates a
+`project.progressed` event. The protected lifecycle routes are:
+
+- `POST /api/ops/projects/:id/appointment-confirmation`
+- `POST /api/ops/projects/:id/appointment-reminder`
+
+Both require an explicit client recipient policy, reserve an idempotency key,
+update the project timeline, and send the styled client email through Render's
+primary/fallback SMTP path. `ENABLE_APPOINTMENT_CONFIRMATIONS` and
+`ENABLE_APPOINTMENT_REMINDERS` are false by default. When reminders are
+enabled, Render checks scheduled projects every `APPOINTMENT_REMINDER_POLL_MS`
+and sends one reminder in the 20–28 hour window before the stored appointment.
+
 The current project-state store is durable only when `STATE_FILE` points at a
 persistent Render disk. Until that is provisioned, Airtable remains the
 recovery source and the Gmail poller should stay disabled.

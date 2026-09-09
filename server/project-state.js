@@ -139,6 +139,31 @@ class ProjectStateStore {
     return project;
   }
 
+  updateProjectProgress(projectId, patch = {}, actor = "render") {
+    const existing = this.getProject(projectId);
+    if (!existing) return null;
+    const before = { status: existing.status, stage: existing.stage };
+    const project = this.upsertProject({
+      ...existing,
+      id: existing.id,
+      status: clean(patch.status) || existing.status,
+      stage: clean(patch.stage) || existing.stage,
+      contacts: existing.contacts,
+      metadata: { ...existing.metadata, ...(patch.metadata || {}) }
+    });
+    this.event({
+      projectId: project.id,
+      type: "project.progressed",
+      actor,
+      data: {
+        before,
+        after: { status: project.status, stage: project.stage },
+        note: clean(patch.note)
+      }
+    });
+    return project;
+  }
+
   getProject(projectId) {
     return this.projects.get(clean(projectId)) || null;
   }

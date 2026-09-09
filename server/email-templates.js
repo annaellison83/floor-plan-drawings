@@ -152,6 +152,61 @@ function clientAvailabilityProposalEmail(job, proposalUrl, slots = []) {
   return { subject, html, text: plainText };
 }
 
+function appointmentDetails(appointment = {}) {
+  const start = appointment.start || appointment.startAt || appointment.appointmentStart;
+  let dateLabel = text(appointment.date);
+  let timeLabel = text(appointment.localStart || appointment.time);
+  if (start) {
+    const parsed = new Date(start);
+    if (!Number.isNaN(parsed.getTime())) {
+      const format = new Intl.DateTimeFormat("en-US", {
+        timeZone: "America/Los_Angeles",
+        weekday: "long",
+        month: "long",
+        day: "numeric",
+        year: "numeric",
+        hour: "numeric",
+        minute: "2-digit"
+      });
+      const parts = Object.fromEntries(format.formatToParts(parsed).map(({ type, value }) => [type, value]));
+      dateLabel = `${parts.weekday}, ${parts.month} ${parts.day}, ${parts.year}`;
+      timeLabel = `${parts.hour}:${parts.minute} ${parts.dayPeriod}`;
+    }
+  }
+  return {
+    dateLabel: dateLabel || "Date to be confirmed",
+    timeLabel: timeLabel || "Time to be confirmed",
+    worker: text(appointment.worker || appointment.employee, "FloorPlanDrawings team"),
+    duration: appointment.durationMinutes ? `${appointment.durationMinutes} minutes` : "scheduled visit",
+    address: text(appointment.address || appointment.propertyAddress),
+    accessNotes: text(appointment.accessNotes || appointment.access, "Reply to this email with any access instructions.")
+  };
+}
+
+function clientAppointmentEmail(job, appointment, mode = "confirmation", reminderLabel = "Tomorrow") {
+  const details = appointmentDetails({ ...appointment, propertyAddress: job.propertyAddress });
+  const name = text(job.clientName, "there");
+  const address = details.address || text(job.propertyAddress);
+  const isReminder = mode === "reminder";
+  const eyebrow = isReminder ? "REMINDER" : "APPOINTMENT CONFIRMED";
+  const title = isReminder ? `${reminderLabel}: your appointment` : "Your appointment is confirmed";
+  const subject = isReminder ? `REMINDER | ${address} | ${details.dateLabel}` : `APPOINTMENT CONFIRMED | ${address}`;
+  const intro = isReminder
+    ? `A quick reminder from FloorPlanDrawings about your upcoming visit.`
+    : `Thanks — your FloorPlanDrawings appointment is on the calendar.`;
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><style>body{margin:0;background:#f3f1eb;color:#22332e;font-family:Arial,Helvetica,sans-serif}.shell{width:100%;background:#f3f1eb}.canvas{width:calc(100% - 32px);max-width:760px;margin:0 auto}.card{margin:24px auto;background:#fbf8f1;border:1px solid #ddd7ca;border-radius:20px}.pad{padding:38px}.eyebrow{color:#53635c;font-size:12px;line-height:17px;font-weight:700;letter-spacing:.15em;text-transform:uppercase}.title{margin:12px 0 12px;color:#173f36;font-size:32px;line-height:40px}.copy{color:#394842;font-size:16px;line-height:25px}.property{margin:24px 0;padding:24px;background:#b8c9ae;border-radius:16px}.property-label{color:#39564b;font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}.address{margin-top:8px;color:#173f36;font-size:23px;line-height:31px;font-weight:700}.details{width:100%;margin-top:20px;border-collapse:separate;border-spacing:8px}.details td{width:50%;padding:18px;background:#e3eadf;border-radius:12px;vertical-align:top}.label{color:#53635c;font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase}.value{margin-top:7px;color:#173f36;font-size:16px;line-height:23px;font-weight:700}.note{margin-top:22px;padding:18px 20px;background:#fff;border:1px solid #e2ddd2;border-radius:12px;color:#394842;font-size:14px;line-height:22px}.fine{margin-top:23px;color:#6b7067;font-size:13px;line-height:20px}@media only screen and (max-width:640px){.canvas{width:100%!important}.card{margin:8px 0;border-radius:13px}.pad{padding:24px 16px!important}.title{font-size:27px;line-height:34px}.property{padding:19px}.address{font-size:21px;line-height:28px}.details{display:block!important;margin-top:14px}.details tr,.details td{display:block!important;width:auto!important}.details td{margin:8px 0;padding:15px}.copy{font-size:15px;line-height:24px}.note{padding:16px}.button{display:block!important;width:auto!important;text-align:center}}</style></head><body><table role="presentation" class="shell" width="100%" cellspacing="0" cellpadding="0"><tr><td><table role="presentation" class="canvas" width="100%" cellspacing="0" cellpadding="0"><tr><td class="card"><div class="pad"><div class="eyebrow">${escapeHtml(eyebrow)}</div><h1 class="title">${escapeHtml(title)}</h1><p class="copy">Hi ${escapeHtml(name)},</p><p class="copy">${escapeHtml(intro)}</p><div class="property"><div class="property-label">Property</div><div class="address">${escapeHtml(address)}</div></div><table role="presentation" class="details" width="100%" cellspacing="0" cellpadding="0"><tr><td><div class="label">Date</div><div class="value">${escapeHtml(details.dateLabel)}</div></td><td><div class="label">Time</div><div class="value">${escapeHtml(details.timeLabel)} · ${escapeHtml(details.duration)}</div></td></tr><tr><td><div class="label">Team member</div><div class="value">${escapeHtml(details.worker)}</div></td><td><div class="label">Service</div><div class="value">${escapeHtml(text(job.service, "Floor plan drawing"))}</div></td></tr></table><div class="note"><strong>Access and next steps</strong><br>${escapeHtml(details.accessNotes)}</div><p class="fine">Need to make a change? Reply to this email and Anna's team will help. Please do not use this message to reschedule without confirmation.</p><p class="copy">Thank you,<br>FloorPlanDrawings</p></div></td></tr></table></td></tr></table></body></html>`;
+  const plainText = [eyebrow, `Hi ${name},`, intro, `Property: ${address}`, `Date: ${details.dateLabel}`, `Time: ${details.timeLabel} · ${details.duration}`, `Team member: ${details.worker}`, `Service: ${text(job.service, "Floor plan drawing")}`, `Access and next steps: ${details.accessNotes}`, "Need to make a change? Reply to this email and Anna's team will help."].join("\n\n");
+  return { subject, html, text: plainText };
+}
+
+function clientAppointmentConfirmationEmail(job, appointment) {
+  return clientAppointmentEmail(job, appointment, "confirmation");
+}
+
+function clientAppointmentReminderEmail(job, appointment, reminderLabel = "Tomorrow") {
+  return clientAppointmentEmail(job, appointment, "reminder", reminderLabel);
+}
+
 function internalLink(label, href) {
   const safe = safeUrl(href);
   return safe ? `<a href="${escapeHtml(safe)}" style="color:#0b57d0;font-weight:700;">${escapeHtml(label)}</a>` : "";
@@ -178,7 +233,7 @@ function newRequestEmail(job) {
   const availabilityPanel = availabilityReviewUrl
     ? `<div class="availability"><div class="eyebrow">Optional appointment availability</div><div class="muted" style="margin-top:8px;">Review the live employee calendars and send the client up to three recommended appointment times. No calendar event is created by this step.</div><div class="button-wrap"><a class="button" href="${escapeHtml(availabilityReviewUrl)}">Check availability &amp; send options</a></div></div>`
     : "";
-  const bodyHtml = `<div class="property-head"><div class="eyebrow">Property address</div><h2 class="address"><a href="${escapeHtml(addressMapUrl)}">${escapeHtml(address)}</a></h2><div class="muted">· ${escapeHtml(text(job.workflow, "Quick Quote"))} · ${escapeHtml(text(job.status, "Needs Quote"))}</div></div><table role="presentation" class="summary" width="100%"><tr>${detail("Client", text(job.clientName))}${detail("Contact", contact)}</tr><tr>${detail("Service requested", text(job.service))}${detail("Scope & options", details)}</tr><tr>${detail("Quote zone", pricing.zoneLabel)}${detail(squareFootage.verified ? "Verified size" : "Size status", squareFootage.label)}</tr></table>${sizeLookupPanel(address, squareFootage)}<div class="quote"><div class="eyebrow">Suggested quote</div><div class="quote-value">${escapeHtml(money(pricing.finalPrice))}</div><div class="muted">${pricing.zoneMinimum ? `Base service ${escapeHtml(money(pricing.basePrice))}; Zone ${pricing.zoneNumber} sets a ${escapeHtml(money(pricing.zoneMinimum))} minimum. The higher amount wins.` : "Assign a zone before approval. Zone minimums are floors, never add-ons."}</div></div>${imageRows ? `<table role="presentation" width="100%" cellspacing="0" cellpadding="0">${imageRows}</table>` : ""}${job.quoteNotes ? `<div class="notes"><strong>Review notes</strong><br>${escapeHtml(job.quoteNotes)}</div>` : ""}${availabilityPanel}${approvalUrl ? `<div class="button-wrap"><a class="button" href="${escapeHtml(approvalUrl)}">Review &amp; approve quote</a></div>` : ""}<div class="button-wrap">${internalLink("Open Airtable record", recordUrl)}</div>`;
+  const bodyHtml = `<div class="property-head"><div class="eyebrow">Property address</div><h2 class="address"><a href="${escapeHtml(addressMapUrl)}">${escapeHtml(address)}</a></h2><div class="muted">· ${escapeHtml(text(job.workflow, "Quick Quote"))} · ${escapeHtml(text(job.status, "Needs Quote"))}</div></div><table role="presentation" class="summary" width="100%"><tr>${detail("Client", text(job.clientName))}${detail("Contact", contact)}</tr><tr>${detail("Service requested", text(job.service))}${detail("Scope & options", details)}</tr><tr>${detail("Quote zone", pricing.zoneLabel)}${detail(squareFootage.verified ? "Verified size" : "Size status", squareFootage.label)}</tr></table>${sizeLookupPanel(address, squareFootage)}<div class="quote"><div class="eyebrow">Suggested quote</div><div class="quote-value">${escapeHtml(money(pricing.finalPrice))}</div><div class="muted">${pricing.zoneMinimum ? `Base service ${escapeHtml(money(pricing.basePrice))}; Zone ${pricing.zoneNumber} sets a ${escapeHtml(money(pricing.zoneMinimum))} minimum. The higher amount wins.` : "Assign a zone before approval. Zone minimums are floors, never add-ons."}</div></div>${imageRows ? `<table role="presentation" width="100%" cellspacing="0" cellpadding="0">${imageRows}</table>` : ""}${job.quoteNotes ? `<div class="notes"><strong>Review notes</strong><br>${escapeHtml(job.quoteNotes)}</div>` : ""}${availabilityPanel}${approvalUrl ? `<div class="button-wrap"><a class="button" href="${escapeHtml(approvalUrl)}">Review &amp; approve quote</a></div>` : ""}<div class="button-wrap">${internalLink("Open Airtable record", recordUrl)}${job.gmailThreadUrl ? ` &nbsp; ${internalLink("Open Gmail thread", job.gmailThreadUrl)}` : ""}</div>`;
   const bodyText = [
     `Client: ${text(job.clientName)}`,
     `Contact: ${contact}`,
@@ -193,6 +248,7 @@ function newRequestEmail(job) {
     availabilityReviewUrl && `Check availability and send appointment options: ${availabilityReviewUrl}`,
     approvalUrl && `Review and approve quote: ${approvalUrl}`,
     recordUrl && `Airtable record: ${recordUrl}`,
+    job.gmailThreadUrl && `Gmail thread: ${job.gmailThreadUrl}`,
     `Map: ${addressMapUrl}`
   ].filter(Boolean).join("\n\n");
   return internalEmailShell("NEW REQUEST", text(job.clientName, "New website request"), "A new website order is ready for review with the same property, pricing, and research context used by the quote workflow.", bodyHtml, bodyText);
@@ -215,6 +271,8 @@ function followUpEmail(jobs, dateLabel) {
 
 module.exports = {
   clientAvailabilityProposalEmail,
+  clientAppointmentConfirmationEmail,
+  clientAppointmentReminderEmail,
   clientQuoteEmail,
   escapeHtml,
   followUpEmail,

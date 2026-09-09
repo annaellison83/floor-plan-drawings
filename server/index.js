@@ -16,6 +16,8 @@ const { createGmailClient, isGmailConfigured, parseGmailMessage, processIntakeMe
 const {
   clientQuoteEmail,
   clientAvailabilityProposalEmail,
+  clientAppointmentConfirmationEmail,
+  clientAppointmentReminderEmail,
   followUpEmail,
   newRequestEmail,
   propertyReviewEmail,
@@ -70,6 +72,8 @@ let newRequestPollRunning = false;
 let propertyReviewPollRunning = false;
 let followUpPollRunning = false;
 let followUpRunDate = "";
+const appointmentLifecycleLocks = new Set();
+let appointmentReminderPollRunning = false;
 
 function clean(value) {
   return value === undefined || value === null ? "" : String(value).trim();
@@ -172,7 +176,10 @@ function integrationStatus() {
     clientQuoteSchedulingEnabled: clientQuoteSchedulingEnabled(),
     deliveryAlertsEnabled: Boolean(clean(process.env.DELIVERY_ALERT_EMAIL)),
     smtpFallbackConfigured: hasFallbackSmtp(),
-    appointmentProposalHoldEnabled: provisionalHoldEnabled()
+    appointmentProposalHoldEnabled: provisionalHoldEnabled(),
+    appointmentConfirmationEnabled: appointmentConfirmationEnabled(),
+    appointmentReminderEnabled: appointmentReminderEnabled(),
+    gmailIntakeNotificationEnabled: gmailIntakeNotificationEnabled()
   };
 }
 
@@ -225,8 +232,59 @@ function provisionalHoldEnabled() {
   return clean(process.env.ENABLE_PROVISIONAL_HOLDS).toLowerCase() === "true";
 }
 
+function appointmentConfirmationEnabled() {
+  return clean(process.env.ENABLE_APPOINTMENT_CONFIRMATIONS).toLowerCase() === "true";
+}
+
+function appointmentReminderEnabled() {
+  return clean(process.env.ENABLE_APPOINTMENT_REMINDERS).toLowerCase() === "true";
+}
+
 function gmailIntakePollEnabled() {
   return clean(process.env.ENABLE_GMAIL_INTAKE_POLL).toLowerCase() === "true";
+}
+
+function gmailIntakeNotificationEnabled() {
+  return clean(process.env.ENABLE_GMAIL_INTAKE_NOTIFICATIONS).toLowerCase() === "true";
+}
+
+async function deliverGmailIntakeNotification(project, message) {
+  if (!project.propertyAddress) return { ok: false, skipped: true, reason: "Property address is missing" };
+  const internalTo = [clean(process.env.SMTP_USER)];
+  if (!internalTo[0]) throw new Error("SMTP_USER is not configured");
+  const threadUrl = message.threadId ? `https://mail.google.com/mail/u/0/#all/${encodeURIComponent(message.threadId)}` : "";
+  const job = {
+    ...projectLifecycleJob(project),
+    workflow: "Gmail Intake",
+    quoteNotes: "Incoming email was labeled for FloorPlanDrawings intake. Review the extracted address and details before quoting.",
+    gmailThreadUrl: threadUrl
+  };
+  const email = newRequestEmail(job);
+  const reservation = projectState.reserveDelivery({
+    projectId: project.id,
+    idempotencyKey: `${project.id}:gmail_intake_notification:v1`,
+    workflow: "GMAIL INTAKE",
+    recipientType: "internal",
+    recipients: internalTo,
+    subject: email.subject
+  });
+  if (reservation.duplicate) return { ok: false, duplicate: true, deliveryId: reservation.delivery.id };
+  const threadHeaders = [message.references, message.messageId].filter(Boolean).join(" ");
+  try {
+    const delivery = await sendMail({
+      to: internalTo,
+      subject: message.subject ? `Re: ${message.subject.replace(/^re:\s*/i, "")}` : email.subject,
+      html: email.html,
+      text: email.text,
+      headers: threadHeaders ? { "In-Reply-To": message.messageId, References: threadHeaders } : undefined
+    });
+    projectState.updateDelivery(reservation.delivery.idempotencyKey, { status: "sent", attempts: delivery.attempts, provider: delivery.provider, messageId: delivery.messageId });
+    return { ok: true, delivery: "sent", messageId: delivery.messageId };
+  } catch (error) {
+    projectState.updateDelivery(reservation.delivery.idempotencyKey, { status: "failed", error: error.message });
+    await sendFailureAlert({ workflow: "GMAIL INTAKE", recordId: project.id, error });
+    throw error;
+  }
 }
 
 async function ingestGmailMessage(message) {
@@ -264,6 +322,7 @@ async function ingestGmailMessage(message) {
     }
   });
   projectState.event({ projectId: project.id, type: "gmail.message.received", data: { messageId: message.id, threadId: message.threadId, subject: message.subject } });
+  if (gmailIntakeNotificationEnabled()) await deliverGmailIntakeNotification(project, message);
   return project;
 }
 
@@ -877,6 +936,119 @@ async function pollClientQuotes() {
   }
 }
 
+function appointmentPayload(input = {}) {
+  const appointment = input && typeof input.appointment === "object" ? input.appointment : input;
+  const start = clean(appointment.start || appointment.startAt || appointment.appointmentStart);
+  const date = clean(appointment.date);
+  const localStart = clean(appointment.localStart || appointment.time);
+  if (!start && !(date && localStart)) throw new Error("Appointment date and time are required");
+  return {
+    start,
+    end: clean(appointment.end || appointment.endAt),
+    date,
+    localStart,
+    time: clean(appointment.time),
+    worker: clean(appointment.worker || appointment.employee),
+    calendarName: clean(appointment.calendarName),
+    durationMinutes: Number.isFinite(Number(appointment.durationMinutes)) ? Number(appointment.durationMinutes) : undefined,
+    accessNotes: clean(appointment.accessNotes || appointment.access),
+    address: clean(appointment.address || appointment.propertyAddress)
+  };
+}
+
+function projectLifecycleJob(project) {
+  return {
+    recordId: project.id,
+    propertyAddress: project.propertyAddress,
+    clientName: project.clientName,
+    clientEmail: project.contacts && project.contacts.client && project.contacts.client[0],
+    agentEmail: project.contacts && project.contacts.agent && project.contacts.agent[0],
+    service: project.metadata && project.metadata.service,
+    status: project.status,
+    stage: project.stage
+  };
+}
+
+async function deliverProjectAppointmentEmail(projectId, appointment, mode = "confirmation", reminderLabel = "Tomorrow") {
+  const workflow = mode === "reminder" ? "APPOINTMENT REMINDER" : "APPOINTMENT CONFIRMATION";
+  const lockKey = `${projectId}:${workflow}`;
+  if (appointmentLifecycleLocks.has(lockKey)) return { ok: false, status: 409, error: "Delivery already in progress" };
+  appointmentLifecycleLocks.add(lockKey);
+  let reservation = null;
+  try {
+    const project = projectState.getProject(projectId);
+    if (!project) return { ok: false, status: 404, error: "Project not found" };
+    const to = recipientsFor(mode === "reminder" ? "appointment reminder" : "appointment confirmation", project.contacts);
+    const job = projectLifecycleJob(project);
+    const email = mode === "reminder"
+      ? clientAppointmentReminderEmail(job, appointment, reminderLabel)
+      : clientAppointmentConfirmationEmail(job, appointment);
+    const version = mode === "reminder"
+      ? (clean(appointment.date) || clean(appointment.start).slice(0, 10) || "next")
+      : "v1";
+    reservation = projectState.reserveDelivery({
+      projectId,
+      idempotencyKey: `${projectId}:${mode === "reminder" ? "appointment_reminder" : "appointment_confirmation"}:${version}`,
+      workflow,
+      recipientType: project.contacts.policy,
+      recipients: to,
+      subject: email.subject
+    });
+    if (reservation.duplicate) return { ok: false, status: 409, error: "Duplicate delivery blocked", deliveryId: reservation.delivery.id };
+    const appointmentMetadata = {
+      appointment: {
+        start: appointment.start,
+        end: appointment.end,
+        date: appointment.date,
+        localStart: appointment.localStart,
+        worker: appointment.worker,
+        calendarName: appointment.calendarName,
+        durationMinutes: appointment.durationMinutes,
+        address: appointment.address,
+        accessNotes: appointment.accessNotes
+      },
+      ...(mode === "reminder" ? { lastReminderSentAt: new Date().toISOString() } : { confirmationSentAt: new Date().toISOString() })
+    };
+    projectState.updateProjectProgress(projectId, {
+      status: "scheduled",
+      stage: "scheduled",
+      metadata: appointmentMetadata,
+      note: `${workflow} queued by Render`
+    }, "render");
+    const delivery = await sendMail({ to, replyTo: clean(process.env.SMTP_USER), subject: email.subject, html: email.html, text: email.text });
+    projectState.updateDelivery(reservation.delivery.idempotencyKey, { status: "sent", attempts: delivery.attempts, provider: delivery.provider, messageId: delivery.messageId });
+    return { ok: true, status: 200, projectId, workflow, recipients: to, delivery: "sent", messageId: delivery.messageId };
+  } catch (error) {
+    if (reservation && reservation.delivery) projectState.updateDelivery(reservation.delivery.idempotencyKey, { status: "failed", error: error.message });
+    await sendFailureAlert({ workflow, recordId: projectId, error });
+    return { ok: false, status: 502, error: `${workflow} delivery failed`, detail: error.message };
+  } finally {
+    appointmentLifecycleLocks.delete(lockKey);
+  }
+}
+
+async function pollAppointmentReminders() {
+  if (!appointmentReminderEnabled() || appointmentReminderPollRunning) return;
+  appointmentReminderPollRunning = true;
+  try {
+    const nowMs = Date.now();
+    for (const project of projectState.listProjects({ stage: "scheduled", limit: 500 })) {
+      const appointment = project.metadata && project.metadata.appointment;
+      const start = appointment && appointment.start;
+      if (!start || project.metadata.lastReminderSentAt) continue;
+      const startMs = new Date(start).getTime();
+      const hours = (startMs - nowMs) / 3600000;
+      if (!Number.isFinite(hours) || hours < 20 || hours > 28) continue;
+      const result = await deliverProjectAppointmentEmail(project.id, appointment, "reminder", "Tomorrow");
+      console.log(`APPOINTMENT REMINDER poll ${project.id}: ${result.ok ? "sent" : result.error}`);
+    }
+  } catch (error) {
+    console.error(`APPOINTMENT REMINDER poll failed: ${error.message}`);
+  } finally {
+    appointmentReminderPollRunning = false;
+  }
+}
+
 async function deliverInternalNotification(recordId, eventType, buildEmail, statusStamp) {
   const lockKey = `${eventType}:${recordId}`;
   if (internalNotificationLocks.has(lockKey)) return { ok: false, status: 409, error: "Delivery already in progress" };
@@ -1226,6 +1398,53 @@ async function route(req, res) {
       return json(res, 201, { ok: true, project });
     } catch (error) {
       return json(res, 400, { error: "Project state could not be saved", detail: error.message });
+    }
+  }
+
+  const projectProgressMatch = url.pathname.match(/^\/api\/ops\/projects\/([^/]+)\/progress$/);
+  if (req.method === "POST" && projectProgressMatch) {
+    if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+    try {
+      const projectId = decodeURIComponent(projectProgressMatch[1]);
+      const body = await readJsonBody(req);
+      const project = projectState.updateProjectProgress(projectId, {
+        status: clean(body.status),
+        stage: clean(body.stage),
+        metadata: body.metadata,
+        note: clean(body.note)
+      }, clean(body.actor) || "anna");
+      if (!project) return json(res, 404, { error: "Project not found" });
+      return json(res, 200, { ok: true, project, event: projectState.listEvents({ projectId, type: "project.progressed", limit: 1 })[0] || null });
+    } catch (error) {
+      return json(res, 400, { error: "Project progress could not be saved", detail: error.message });
+    }
+  }
+
+  const confirmationMatch = url.pathname.match(/^\/api\/ops\/projects\/([^/]+)\/appointment-confirmation$/);
+  if (req.method === "POST" && confirmationMatch) {
+    if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+    if (!appointmentConfirmationEnabled()) return json(res, 503, { error: "Appointment confirmations are disabled" });
+    try {
+      const body = await readJsonBody(req);
+      const appointment = appointmentPayload(body);
+      const result = await deliverProjectAppointmentEmail(decodeURIComponent(confirmationMatch[1]), appointment, "confirmation");
+      return json(res, result.status, result);
+    } catch (error) {
+      return json(res, 400, { error: "Appointment confirmation could not be sent", detail: error.message });
+    }
+  }
+
+  const reminderMatch = url.pathname.match(/^\/api\/ops\/projects\/([^/]+)\/appointment-reminder$/);
+  if (req.method === "POST" && reminderMatch) {
+    if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+    if (!appointmentReminderEnabled()) return json(res, 503, { error: "Appointment reminders are disabled" });
+    try {
+      const body = await readJsonBody(req);
+      const appointment = appointmentPayload(body);
+      const result = await deliverProjectAppointmentEmail(decodeURIComponent(reminderMatch[1]), appointment, "reminder", clean(body.reminderLabel) || "Tomorrow");
+      return json(res, result.status, result);
+    } catch (error) {
+      return json(res, 400, { error: "Appointment reminder could not be sent", detail: error.message });
     }
   }
 
@@ -1635,6 +1854,36 @@ async function route(req, res) {
     }
   }
 
+  if (req.method === "POST" && (url.pathname === "/api/email/test-appointment-confirmation" || url.pathname === "/api/email/test-appointment-reminder")) {
+    if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+    const recipient = TEST_EMAIL_RECIPIENT;
+    try {
+      const sampleJob = await buildTestQuote();
+      const appointment = {
+        start: "2026-09-15T18:00:00.000Z",
+        date: "2026-09-15",
+        localStart: "11:00 AM",
+        worker: "Corrie",
+        durationMinutes: 90,
+        address: sampleJob.propertyAddress,
+        accessNotes: "Please make sure the agent or homeowner can provide access on arrival."
+      };
+      const isReminder = url.pathname.endsWith("reminder");
+      const sample = isReminder
+        ? clientAppointmentReminderEmail(sampleJob, appointment, "Tomorrow")
+        : clientAppointmentConfirmationEmail(sampleJob, appointment);
+      const delivery = await sendMail({
+        to: recipient,
+        subject: `[TEST — NO WORKFLOW] ${sample.subject}`,
+        html: sample.html,
+        text: sample.text
+      });
+      return json(res, 200, { ok: true, test: true, workflow: isReminder ? "APPOINTMENT REMINDER" : "APPOINTMENT CONFIRMATION", recipient, propertyAddress: sampleJob.propertyAddress, ...delivery });
+    } catch (error) {
+      return json(res, 502, { error: "Appointment lifecycle test email failed", detail: error.message });
+    }
+  }
+
   if (req.method === "POST" && url.pathname === "/api/email/test-scheduling") {
     if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
     const recipient = TEST_EMAIL_RECIPIENT;
@@ -1712,6 +1961,10 @@ server.listen(PORT, "0.0.0.0", () => {
   setInterval(pollClientQuotes, Number(process.env.CLIENT_QUOTE_POLL_MS) || 60000).unref();
   setTimeout(pollFollowUps, 10000).unref();
   setInterval(pollFollowUps, Number(process.env.FOLLOW_UP_POLL_MS) || 60000).unref();
+  if (appointmentReminderEnabled()) {
+    setTimeout(() => pollAppointmentReminders().catch((error) => console.error(`APPOINTMENT REMINDER poll failed: ${error.message}`)), 15000).unref();
+    setInterval(() => pollAppointmentReminders().catch((error) => console.error(`APPOINTMENT REMINDER poll failed: ${error.message}`)), Number(process.env.APPOINTMENT_REMINDER_POLL_MS) || 900000).unref();
+  }
   if (gmailIntakePollEnabled()) {
     setTimeout(() => pollGmailIntake().catch((error) => console.error(`Gmail intake poll failed: ${error.message}`)), 12000).unref();
     setInterval(() => pollGmailIntake().catch((error) => console.error(`Gmail intake poll failed: ${error.message}`)), Number(process.env.GMAIL_INTAKE_POLL_MS) || 120000).unref();

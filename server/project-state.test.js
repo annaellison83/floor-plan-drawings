@@ -42,3 +42,21 @@ test("reserves delivery idempotently and records an auditable lifecycle", () => 
   assert.ok(events.some((event) => event.type === "delivery.reserved"));
   assert.ok(events.some((event) => event.type === "delivery.failed"));
 });
+
+test("progress updates persist status, stage, metadata, and a progress event", () => {
+  const store = new ProjectStateStore();
+  const project = store.upsertProject({ id: "project-progress", address: "1 Main St", clientEmail: "client@example.com" });
+  const updated = store.updateProjectProgress(project.id, {
+    status: "scheduled",
+    stage: "scheduled",
+    metadata: { appointmentStart: "2026-09-14T18:00:00.000Z", worker: "Corrie" },
+    note: "Client selected the confirmed appointment"
+  }, "anna");
+  assert.equal(updated.status, "scheduled");
+  assert.equal(updated.stage, "scheduled");
+  assert.equal(updated.metadata.worker, "Corrie");
+  const event = store.listEvents({ projectId: project.id, type: "project.progressed" })[0];
+  assert.equal(event.actor, "anna");
+  assert.equal(event.data.after.stage, "scheduled");
+  assert.equal(event.data.note, "Client selected the confirmed appointment");
+});
