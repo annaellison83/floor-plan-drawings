@@ -67,15 +67,18 @@ function findProjectMatch(event, calendar, projects = []) {
   }) || null;
 }
 
-function calendarAirtableFields(calendar, event, project = null) {
+function calendarAirtableFields(calendar, event, project = null, gmailMatch = null) {
   const address = extractAddress(event) || (project && project.propertyAddress) || "";
   const start = eventStart(event.start);
   const end = eventStart(event.end);
+  const projectClient = project && project.contacts && project.contacts.client;
+  const projectClientEmail = Array.isArray(projectClient) ? projectClient[0] : projectClient;
+  const gmailClient = gmailMatch && gmailMatch.contacts && gmailMatch.contacts.client && gmailMatch.contacts.client[0];
   return {
     "Job ID": jobIdForCalendarEvent(calendar, event),
     "Property Address": address,
-    "Client Name": project && project.clientName || "",
-    "Client Email": project && project.contacts && project.contacts.client && project.contacts.client[0] || "",
+    "Client Name": project && project.clientName || gmailMatch && gmailMatch.clientName || "",
+    "Client Email": projectClientEmail || gmailClient && gmailClient.email || "",
     "Status": "Calendar Imported",
     "Website Workflow": "Calendar",
     "Calendar Event UID": clean(event.uid),
@@ -87,7 +90,7 @@ function calendarAirtableFields(calendar, event, project = null) {
     "Calendar Event Description": clean(event.description),
     "Calendar Event Location": clean(event.location),
     "Calendar Sync Source": "iCloud",
-    "Gmail Thread ID": project && project.metadata && project.metadata.gmailThreadId || "",
+    "Gmail Thread ID": project && project.metadata && project.metadata.gmailThreadId || gmailMatch && gmailMatch.threadId || "",
     "Calendar Sync Key": calendarEventKey(calendar, event)
   };
 }

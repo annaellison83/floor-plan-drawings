@@ -286,6 +286,37 @@ function knownAirtablePatch(record, fields) {
   return Object.fromEntries(Object.entries(fields).filter(([key, value]) => Object.prototype.hasOwnProperty.call(existing, key) && value !== ""));
 }
 
+async function findGmailThreadMatch(event, client, cache, errors = []) {
+  const address = extractAddress(event);
+  if (!client || !address) return null;
+  const key = normalizeAddress(address);
+  if (!key) return null;
+  if (cache.has(key)) return cache.get(key);
+  let match = null;
+  try {
+    // Read-only search. Do not constrain this lookup to the intake label: a thread
+    // may have progressed to scheduling, revision, delivery, or closed.
+    const listed = await client.listMessages({ labelId: "", query: `"${address}"`, maxResults: 10 });
+    for (const item of listed.messages || []) {
+      if (!clean(item && item.id)) continue;
+      const parsed = parseGmailMessage(await client.getMessage(item.id), {
+        agentEmails: client.config && client.config.agentEmails,
+        clientEmails: client.config && client.config.clientEmails
+      });
+      const parsedAddress = normalizeAddress(parsed.propertyAddress);
+      const searchable = normalizeAddress(`${parsed.propertyAddress} ${parsed.subject} ${parsed.text}`);
+      if (parsedAddress === key || searchable.includes(key)) {
+        match = parsed;
+        break;
+      }
+    }
+  } catch (error) {
+    errors.push({ address, error: error.message });
+  }
+  cache.set(key, match);
+  return match;
+}
+
 async function syncCalendarToAirtable(input = {}) {
   const range = calendarSyncRange(input);
   const dryRun = input.dryRun === undefined ? true : Boolean(input.dryRun);
@@ -296,6 +327,9 @@ async function syncCalendarToAirtable(input = {}) {
   const calendarResults = await getCalendarEvents({ email: clean(process.env.ICLOUD_EMAIL), password: clean(process.env.ICLOUD_APP_PASSWORD), calendars, start: range.start, end: range.end });
   const renderProjects = projectState.listProjects({ limit: 500 });
   const airtableRecords = await listJobs({ maxRecords: 500 });
+  const gmailClient = isGmailConfigured() ? createGmailClient() : null;
+  const gmailCache = new Map();
+  const gmailLookupErrors = [];
   const results = [];
   const skipped = [];
   for (const result of calendarResults) {
@@ -307,7 +341,8 @@ async function syncCalendarToAirtable(input = {}) {
       }
       const key = calendarEventKey(calendar, event);
       const project = findProjectMatch(event, calendar, renderProjects);
-      const fields = calendarAirtableFields(calendar, event, project);
+      const gmailMatch = project ? null : await findGmailThreadMatch(event, gmailClient, gmailCache, gmailLookupErrors);
+      const fields = calendarAirtableFields(calendar, event, project, gmailMatch);
       const existing = airtableCalendarMatch(fields, airtableRecords);
       const action = existing ? "matched" : "create";
       let airtableRecordId = existing && existing.id || "";
@@ -355,11 +390,13 @@ async function syncCalendarToAirtable(input = {}) {
         propertyAddress: extractAddress(event) || fields["Property Address"],
         start: fields["Calendar Event Start"],
         airtableRecordId,
-        renderProjectId: project && project.id || ""
+        renderProjectId: project && project.id || "",
+        gmailThreadId: fields["Gmail Thread ID"],
+        gmailMatched: Boolean(gmailMatch)
       });
     }
   }
-  return { ok: true, readOnly: dryRun, startDate: range.startDate, days: range.days, calendars: calendars.map((calendar) => calendar.name), imported: results.filter((item) => item.action === "create").length, matched: results.filter((item) => item.action === "matched").length, skipped: skipped.length, skippedEvents: skipped, results };
+  return { ok: true, readOnly: dryRun, startDate: range.startDate, days: range.days, calendars: calendars.map((calendar) => calendar.name), imported: results.filter((item) => item.action === "create").length, matched: results.filter((item) => item.action === "matched").length, gmailMatched: results.filter((item) => item.gmailMatched).length, gmailLookupErrors, skipped: skipped.length, skippedEvents: skipped, results };
 }
 
 async function pollCalendarAirtableSync() {

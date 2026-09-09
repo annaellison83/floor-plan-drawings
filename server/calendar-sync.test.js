@@ -47,3 +47,14 @@ test("calendar sync fields preserve the thread link and stable event identity", 
   assert.equal(fields["Gmail Thread ID"], "thread-1");
   assert.equal(fields["Property Address"], "123 Main St, Los Angeles, CA 90065");
 });
+
+test("calendar sync can carry an explicitly classified Gmail thread", () => {
+  const fields = calendarAirtableFields(calendar, event, null, {
+    threadId: "thread-42",
+    clientName: "Client From Thread",
+    contacts: { client: [{ email: "client@example.com" }] }
+  });
+  assert.equal(fields["Gmail Thread ID"], "thread-42");
+  assert.equal(fields["Client Name"], "Client From Thread");
+  assert.equal(fields["Client Email"], "client@example.com");
+});
