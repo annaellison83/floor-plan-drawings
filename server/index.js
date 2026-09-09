@@ -11,6 +11,8 @@ const { appointmentDurationMinutes, deliveryTargetForWeekday, schedulingPolicy }
 const { planAppointments } = require("./appointment-planner");
 const { proposalPayload, signProposal, verifyProposal } = require("./appointment-proposals");
 const { hasFallbackSmtp, isSmtpConfigured, sendFailureAlert, sendMail, verifySmtp } = require("./mail");
+const { projectState, recipientsFor } = require("./project-state");
+const { createGmailClient, isGmailConfigured, processIntakeMessages } = require("./gmail-runtime");
 const {
   clientQuoteEmail,
   clientAvailabilityProposalEmail,
@@ -40,6 +42,11 @@ const {
   updateCommunicationLog,
   updateJob
 } = require("./airtable");
+const {
+  createAirtableIntakeRecord,
+  intakeAuthorized,
+  validateIntakeEnvelope
+} = require("./intake");
 
 const PORT = Number(process.env.PORT) || 10000;
 const SERVICE_NAME = "floorplan-drawings-backend";
@@ -66,6 +73,47 @@ let followUpRunDate = "";
 
 function clean(value) {
   return value === undefined || value === null ? "" : String(value).trim();
+}
+
+function syncProjectState(job, patch = {}) {
+  return projectState.upsertProject({
+    id: job.recordId,
+    source: "airtable",
+    sourceId: job.recordId,
+    propertyAddress: job.propertyAddress,
+    clientName: job.clientName,
+    status: patch.status || job.status || "new",
+    stage: patch.stage || job.workflow || "intake",
+    contacts: {
+      client: job.clientEmail,
+      agent: job.agentEmail,
+      internal: clean(process.env.SMTP_USER),
+      policy: job.recipientPolicy || "client",
+      policyExplicit: Boolean(job.recipientPolicy)
+    },
+    metadata: {
+      service: job.service,
+      quoteZone: job.quoteZone,
+      gmailThreadId: job.gmailThreadId,
+      ...patch.metadata
+    }
+  });
+}
+
+function messageRecipients(job, purpose) {
+  const project = syncProjectState(job);
+  return { project, to: recipientsFor(purpose, project.contacts) };
+}
+
+function reserveRenderDelivery({ project, workflow, recipientType, to, subject, version = "v1" }) {
+  return projectState.reserveDelivery({
+    projectId: project.id,
+    idempotencyKey: `${project.id}:${clean(workflow).toLowerCase().replace(/[^a-z0-9]+/g, "_")}:${version}`,
+    workflow,
+    recipientType,
+    recipients: to,
+    subject
+  });
 }
 
 function json(res, status, body) {
@@ -100,6 +148,9 @@ function integrationStatus() {
     airtable: Boolean(process.env.AIRTABLE_TOKEN && process.env.AIRTABLE_BASE_ID),
     smtp: smtpReady,
     gmailSmtp: Boolean(process.env.SMTP_USER && process.env.SMTP_APP_PASSWORD),
+    gmailApiIntake: isGmailConfigured(),
+    gmailIntakePollEnabled: gmailIntakePollEnabled(),
+    renderStateDurable: Boolean(clean(process.env.STATE_FILE)),
     icloud: Boolean(process.env.ICLOUD_EMAIL && process.env.ICLOUD_APP_PASSWORD),
     googleMaps: Boolean(process.env.GOOGLE_MAPS_STATIC_KEY || process.env.GOOGLE_MAPS_SERVER_KEY),
     postgres: Boolean(process.env.DATABASE_URL),
@@ -172,6 +223,69 @@ function clientQuoteSchedulingEnabled() {
 
 function provisionalHoldEnabled() {
   return clean(process.env.ENABLE_PROVISIONAL_HOLDS).toLowerCase() === "true";
+}
+
+function gmailIntakePollEnabled() {
+  return clean(process.env.ENABLE_GMAIL_INTAKE_POLL).toLowerCase() === "true";
+}
+
+async function ingestGmailMessage(message) {
+  const source = message.contacts && message.contacts.source;
+  const clientContacts = message.contacts && message.contacts.client || [];
+  const agentContacts = message.contacts && message.contacts.agent || [];
+  const policy = clientContacts.length && !agentContacts.length ? "client" : agentContacts.length && !clientContacts.length ? "agent" : "";
+  const projectId = `gmail-${clean(message.threadId || message.id).replace(/[^A-Za-z0-9_-]/g, "_")}`;
+  const project = projectState.upsertProject({
+    id: projectId,
+    source: "gmail",
+    sourceId: clean(message.threadId || message.id),
+    status: "new",
+    stage: "intake",
+    clientName: clientContacts[0] && clientContacts[0].name,
+    contacts: {
+      client: clientContacts.map((contact) => contact.email),
+      agent: agentContacts.map((contact) => contact.email),
+      internal: clean(process.env.SMTP_USER),
+      policy,
+      policyExplicit: Boolean(policy)
+    },
+    metadata: {
+      gmailMessageId: message.id,
+      gmailThreadId: message.threadId,
+      gmailMessageIdHeader: message.messageId,
+      subject: message.subject,
+      sourceEmail: source && source.email,
+      sourceName: source && source.name,
+      receivedAt: message.date || message.internalDate,
+      replyTo: (message.replyTo || []).map((contact) => contact.email),
+      references: message.references,
+      textSnippet: clean(message.text).slice(0, 8000),
+      intakeLabelIds: message.labelIds
+    }
+  });
+  projectState.event({ projectId: project.id, type: "gmail.message.received", data: { messageId: message.id, threadId: message.threadId, subject: message.subject } });
+  return project;
+}
+
+async function pollGmailIntake() {
+  if (!isGmailConfigured()) return { ok: false, skipped: true, reason: "Gmail OAuth or intake label is not configured" };
+  const client = createGmailClient();
+  const store = {
+    has: async (key) => projectState.hasProcessedMessage(key),
+    mark: async (key) => projectState.markProcessedMessage(key)
+  };
+  const result = await processIntakeMessages({
+    client,
+    store,
+    onMessage: ingestGmailMessage
+  });
+  const processed = result.processed.map((message) => ({ id: message.id, threadId: message.threadId, subject: message.subject }));
+  if (clean(process.env.GMAIL_PROCESSED_LABEL_ID) && processed.length) {
+    for (const message of result.processed) {
+      await client.modifyLabels(message.id, { addLabelIds: [clean(process.env.GMAIL_PROCESSED_LABEL_ID)] });
+    }
+  }
+  return { ok: true, processed, skipped: result.skipped, nextPageToken: result.nextPageToken };
 }
 
 function holdId({ jobKey, worker, start }) {
@@ -454,7 +568,8 @@ function proposalPage(payload, token, notice = "", actionUrl = appointmentPropos
 
 async function sendAvailabilityProposal(recordId, input = {}) {
   const { job, availability, plan, payload } = await buildAppointmentProposal(recordId, input);
-  if (!job.clientEmail) throw new Error("Client Email is missing");
+  const target = messageRecipients(job, "appointment options");
+  if (!target.to.length) throw new Error("A client or explicitly selected appointment recipient is missing");
   let proposalSlots = plan.recommendations;
   if (Array.isArray(input.selectedSlots) && input.selectedSlots.length) {
     if (input.selectedSlots.length > 5) throw new Error("Choose up to five appointment options");
@@ -483,14 +598,18 @@ async function sendAvailabilityProposal(recordId, input = {}) {
   const email = clientAvailabilityProposalEmail(job, proposalUrl, proposalSlots);
   const prior = await findAppointmentProposalDeliveries(recordId);
   if (prior.length) return { ok: false, status: 409, error: "Appointment proposal already sent", recordId, priorDeliveryRecordIds: prior.map((item) => item.id) };
+  const stateReservation = reserveRenderDelivery({ project: target.project, workflow: "APPOINTMENT OPTIONS", recipientType: target.project.contacts.policy, to: target.to, subject: email.subject });
+  if (stateReservation.duplicate) return { ok: false, status: 409, error: "Duplicate delivery blocked", recordId, deliveryId: stateReservation.delivery.id };
   const reservation = await createAppointmentProposalLog({ recordId, subject: email.subject, status: "Pending", summary: `Reserved by Render for ${proposalSlots.length} appointment options` });
   const logRecordId = reservation.records && reservation.records[0] && reservation.records[0].id;
   if (!logRecordId) throw new Error("Airtable did not return the appointment proposal log ID");
   try {
-    const delivery = await sendMail({ to: job.clientEmail, replyTo: clean(process.env.SMTP_USER), subject: email.subject, html: email.html, text: email.text });
+    const delivery = await sendMail({ to: target.to, replyTo: clean(process.env.SMTP_USER), subject: email.subject, html: email.html, text: email.text });
+    projectState.updateDelivery(stateReservation.delivery.idempotencyKey, { status: "sent", attempts: delivery.attempts, provider: delivery.provider, messageId: delivery.messageId });
     await updateCommunicationLog(logRecordId, { "Delivery Status": "Sent", Summary: `Appointment options sent by Render for ${job.propertyAddress}${delivery.messageId ? `; message ${delivery.messageId}` : ""}` });
     return { ok: true, status: 200, recordId, logRecordId, proposalUrl, options: proposalSlots };
   } catch (error) {
+    projectState.updateDelivery(stateReservation.delivery.idempotencyKey, { status: "failed", error: error.message });
     await updateCommunicationLog(logRecordId, { "Delivery Status": "Failed", Summary: `Appointment proposal delivery failed: ${error.message}` }).catch(() => {});
     throw error;
   }
@@ -571,6 +690,7 @@ async function deliverQuoteReady(recordId) {
   if (quoteReadyLocks.has(recordId)) return { ok: false, status: 409, error: "Delivery already in progress" };
   quoteReadyLocks.add(recordId);
   let logRecordId = "";
+  let stateReservation = null;
 
   try {
     const priorDeliveries = await findQuoteReadyDeliveries(recordId);
@@ -578,6 +698,9 @@ async function deliverQuoteReady(recordId) {
       return { ok: false, status: 409, error: "Duplicate delivery blocked" };
     }
     const job = await getJob(recordId);
+    const project = syncProjectState(job);
+    const internalTo = [clean(process.env.SMTP_USER)];
+    if (!internalTo[0]) throw new Error("SMTP_USER is not configured");
     const email = quoteReadyEmail(job);
     if (shadowEnabled("QUOTE_READY")) {
       return { ok: true, shadow: true, status: 200, recordId, subject: email.subject, delivery: "not-sent" };
@@ -590,10 +713,10 @@ async function deliverQuoteReady(recordId) {
     });
     logRecordId = reservation.records && reservation.records[0] && reservation.records[0].id;
     if (!logRecordId) throw new Error("Airtable did not return the reserved Communication Log ID");
-
-    const recipient = clean(process.env.SMTP_USER);
-    if (!recipient) throw new Error("SMTP_USER is not configured");
-    const delivery = await sendMail({ to: recipient, subject: email.subject, html: email.html, text: email.text });
+    stateReservation = reserveRenderDelivery({ project, workflow: "QUOTE READY", recipientType: "internal", to: internalTo, subject: email.subject });
+    if (stateReservation.duplicate) return { ok: false, status: 409, error: "Duplicate delivery blocked", recordId, deliveryId: stateReservation.delivery.id };
+    const delivery = await sendMail({ to: internalTo, subject: email.subject, html: email.html, text: email.text });
+    projectState.updateDelivery(stateReservation.delivery.idempotencyKey, { status: "sent", attempts: delivery.attempts, provider: delivery.provider, messageId: delivery.messageId });
     await updateCommunicationLog(logRecordId, {
       "Delivery Status": "Sent",
       Summary: `Delivered by Render via Gmail SMTP${delivery.messageId ? `; message ${delivery.messageId}` : ""}`
@@ -601,6 +724,7 @@ async function deliverQuoteReady(recordId) {
     await updateJob(recordId, { "Anna Email Status": "Sent - Quote Ready" });
     return { ok: true, status: 200, recordId, logRecordId, delivery: "sent" };
   } catch (error) {
+    if (stateReservation && stateReservation.delivery) projectState.updateDelivery(stateReservation.delivery.idempotencyKey, { status: "failed", error: error.message });
     if (logRecordId) {
       await updateCommunicationLog(logRecordId, {
         "Delivery Status": "Failed",
@@ -634,11 +758,13 @@ async function deliverClientQuote(recordId) {
   if (clientQuoteLocks.has(recordId)) return { ok: false, status: 409, error: "Delivery already in progress" };
   clientQuoteLocks.add(recordId);
   let logRecordId = "";
+  let stateReservation = null;
   try {
     const priorDeliveries = await findClientQuoteDeliveries(recordId);
     if (priorDeliveries.length) return { ok: false, status: 409, error: "Duplicate delivery blocked" };
     const job = await getJob(recordId);
-    if (!job.clientEmail) throw new Error("Client Email is missing");
+    const target = messageRecipients(job, "client quote");
+    if (!target.to.length) throw new Error("Client Email is missing");
     if (!Number.isFinite(Number(job.finalQuote)) || Number(job.finalQuote) <= 0) throw new Error("Approved quote amount is missing");
     let proposalUrl = "";
     let proposalSlots = [];
@@ -665,13 +791,16 @@ async function deliverClientQuote(recordId) {
     });
     logRecordId = reservation.records && reservation.records[0] && reservation.records[0].id;
     if (!logRecordId) throw new Error("Airtable did not return the reserved Communication Log ID");
+    stateReservation = reserveRenderDelivery({ project: target.project, workflow: "CLIENT QUOTE", recipientType: target.project.contacts.policy, to: target.to, subject: email.subject });
+    if (stateReservation.duplicate) return { ok: false, status: 409, error: "Duplicate delivery blocked", recordId, deliveryId: stateReservation.delivery.id };
     const delivery = await sendMail({
-      to: job.clientEmail,
+      to: target.to,
       replyTo: clean(process.env.SMTP_USER),
       subject: email.subject,
       html: email.html,
       text: email.text
     });
+    projectState.updateDelivery(stateReservation.delivery.idempotencyKey, { status: "sent", attempts: delivery.attempts, provider: delivery.provider, messageId: delivery.messageId });
     const sentAt = new Date().toISOString();
     await updateCommunicationLog(logRecordId, {
       "Delivery Status": "Sent",
@@ -685,6 +814,7 @@ async function deliverClientQuote(recordId) {
     });
     return { ok: true, status: 200, recordId, logRecordId, delivery: "sent", accepted: delivery.accepted };
   } catch (error) {
+    if (stateReservation && stateReservation.delivery) projectState.updateDelivery(stateReservation.delivery.idempotencyKey, { status: "failed", error: error.message });
     if (logRecordId) {
       await updateCommunicationLog(logRecordId, {
         "Delivery Status": "Failed",
@@ -719,10 +849,14 @@ async function deliverInternalNotification(recordId, eventType, buildEmail, stat
   if (internalNotificationLocks.has(lockKey)) return { ok: false, status: 409, error: "Delivery already in progress" };
   internalNotificationLocks.add(lockKey);
   let logRecordId = "";
+  let stateReservation = null;
   try {
     const priorDeliveries = await findNotificationDeliveries(recordId, eventType);
     if (priorDeliveries.length) return { ok: false, status: 409, error: "Duplicate delivery blocked" };
     const job = await getJob(recordId);
+    const project = syncProjectState(job);
+    const internalTo = [clean(process.env.SMTP_USER)];
+    if (!internalTo[0]) throw new Error("SMTP_USER is not configured");
     const email = buildEmail(job);
     if (shadowEnabled(eventType)) {
       return { ok: true, shadow: true, status: 200, recordId, eventType, subject: email.subject, delivery: "not-sent" };
@@ -736,9 +870,10 @@ async function deliverInternalNotification(recordId, eventType, buildEmail, stat
     });
     logRecordId = reservation.records && reservation.records[0] && reservation.records[0].id;
     if (!logRecordId) throw new Error("Airtable did not return the reserved Communication Log ID");
-    const recipient = clean(process.env.SMTP_USER);
-    if (!recipient) throw new Error("SMTP_USER is not configured");
-    const delivery = await sendMail({ to: recipient, subject: email.subject, html: email.html, text: email.text });
+    stateReservation = reserveRenderDelivery({ project, workflow: eventType, recipientType: "internal", to: internalTo, subject: email.subject });
+    if (stateReservation.duplicate) return { ok: false, status: 409, error: "Duplicate delivery blocked", recordId, deliveryId: stateReservation.delivery.id };
+    const delivery = await sendMail({ to: internalTo, subject: email.subject, html: email.html, text: email.text });
+    projectState.updateDelivery(stateReservation.delivery.idempotencyKey, { status: "sent", attempts: delivery.attempts, provider: delivery.provider, messageId: delivery.messageId });
     await updateCommunicationLog(logRecordId, {
       "Delivery Status": "Sent",
       Summary: `Delivered by Render via SMTP${delivery.messageId ? `; message ${delivery.messageId}` : ""}`
@@ -746,6 +881,7 @@ async function deliverInternalNotification(recordId, eventType, buildEmail, stat
     await updateJob(recordId, { "Anna Email Status": statusStamp });
     return { ok: true, status: 200, recordId, logRecordId, delivery: "sent" };
   } catch (error) {
+    if (stateReservation && stateReservation.delivery) projectState.updateDelivery(stateReservation.delivery.idempotencyKey, { status: "failed", error: error.message });
     if (logRecordId) await updateCommunicationLog(logRecordId, { "Delivery Status": "Failed", Summary: `Render delivery failed: ${error.message}` }).catch(() => {});
     await sendFailureAlert({ workflow: eventType, recordId, error });
     return { ok: false, status: 502, error: `${eventType} delivery failed`, detail: error.message };
@@ -819,13 +955,29 @@ async function pollFollowUps() {
     });
     const logRecordId = reservation.records && reservation.records[0] && reservation.records[0].id;
     if (!logRecordId) throw new Error("Airtable did not return the follow-up Communication Log ID");
+    const followUpProject = projectState.upsertProject({
+      id: "daily-follow-up",
+      source: "airtable",
+      sourceId: "daily-follow-up",
+      status: "active",
+      stage: "delivery",
+      contacts: { internal: clean(process.env.SMTP_USER), policy: "internal" },
+      metadata: { count: jobs.length, date: today }
+    });
+    const followUpTo = [clean(process.env.SMTP_USER)];
+    if (!followUpTo[0]) throw new Error("SMTP_USER is not configured");
+    const stateReservation = reserveRenderDelivery({ project: followUpProject, workflow: "FOLLOW-UP", recipientType: "internal", to: followUpTo, subject: email.subject, version: today });
+    if (stateReservation.duplicate) {
+      followUpRunDate = today;
+      return;
+    }
     try {
-      const recipient = clean(process.env.SMTP_USER);
-      if (!recipient) throw new Error("SMTP_USER is not configured");
-      const delivery = await sendMail({ to: recipient, subject: email.subject, html: email.html, text: email.text });
+      const delivery = await sendMail({ to: followUpTo, subject: email.subject, html: email.html, text: email.text });
+      projectState.updateDelivery(stateReservation.delivery.idempotencyKey, { status: "sent", attempts: delivery.attempts, provider: delivery.provider, messageId: delivery.messageId });
       await updateCommunicationLog(logRecordId, { "Delivery Status": "Sent", Summary: `Delivered by Render via SMTP${delivery.messageId ? `; message ${delivery.messageId}` : ""}` });
       followUpRunDate = today;
     } catch (error) {
+      projectState.updateDelivery(stateReservation.delivery.idempotencyKey, { status: "failed", error: error.message });
       await updateCommunicationLog(logRecordId, { "Delivery Status": "Failed", Summary: `Render follow-up delivery failed: ${error.message}` }).catch(() => {});
       await sendFailureAlert({ workflow: "FOLLOW-UP", recordId: "daily-follow-up", error });
       throw error;
@@ -969,6 +1121,55 @@ async function route(req, res) {
     });
   }
 
+  if (req.method === "POST" && url.pathname === "/api/intake") {
+    if (!intakeAuthorized(req.headers)) return json(res, 401, { ok: false, error: "Unauthorized" });
+    try {
+      const body = await readJsonBody(req);
+      const validation = validateIntakeEnvelope(body);
+      if (!validation.ok) return json(res, 400, { ok: false, error: validation.error });
+      const headerKey = clean(req.headers["x-intake-idempotency-key"]);
+      if (headerKey && headerKey !== validation.idempotencyKey) {
+        return json(res, 400, { ok: false, error: "Idempotency key mismatch" });
+      }
+      const result = await createAirtableIntakeRecord({ fields: body.fields });
+      const intakeFields = result.record && result.record.fields ? result.record.fields : body.fields;
+      const project = projectState.upsertProject({
+        id: result.record && result.record.id,
+        source: "netlify-fpd-intake",
+        sourceId: body.idempotencyKey || (result.record && result.record.id),
+        propertyAddress: intakeFields["Property Address"] || intakeFields.Address,
+        clientName: intakeFields["Client Name"] || intakeFields.Name,
+        contacts: {
+          client: intakeFields["Client Email"] || intakeFields.Email,
+          agent: intakeFields["Agent Email"] || intakeFields["Realtor Email"],
+          policy: intakeFields["Recipient Policy"] || "",
+          policyExplicit: Boolean(intakeFields["Recipient Policy"])
+        },
+        metadata: {
+          workflow: intakeFields["Website Workflow"] || intakeFields.Workflow || "Order",
+          service: intakeFields["Drawing Style"] || intakeFields["Service Requested"]
+        }
+      });
+      return json(res, result.duplicate ? 200 : 201, {
+        ok: true,
+        source: "render-intake",
+        persistence: "airtable",
+        duplicate: result.duplicate,
+        id: result.record.id,
+        projectId: project.id,
+        omittedFields: result.omittedFields,
+        status: result.record.fields && result.record.fields.Status,
+        address: result.record.fields && result.record.fields["Property Address"]
+      });
+    } catch (error) {
+      console.error("Render intake failed", error.message);
+      return json(res, Number.isInteger(error.status) && error.status >= 400 ? 502 : 503, {
+        ok: false,
+        error: "Render intake unavailable"
+      });
+    }
+  }
+
   if (req.method === "GET" && url.pathname === "/api/ops/delivery-failures") {
     if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
     try {
@@ -976,6 +1177,42 @@ async function route(req, res) {
       return json(res, 200, { ok: true, readOnly: true, failures });
     } catch (error) {
       return json(res, 502, { error: "Delivery failure log unavailable", detail: error.message });
+    }
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/ops/projects") {
+    if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+    return json(res, 200, { ok: true, readOnly: true, projects: projectState.listProjects({ status: url.searchParams.get("status"), stage: url.searchParams.get("stage"), limit: url.searchParams.get("limit") }) });
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/ops/projects") {
+    if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+    try {
+      const body = await readJsonBody(req);
+      const project = projectState.upsertProject(body);
+      return json(res, 201, { ok: true, project });
+    } catch (error) {
+      return json(res, 400, { error: "Project state could not be saved", detail: error.message });
+    }
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/ops/events") {
+    if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+    return json(res, 200, { ok: true, readOnly: true, events: projectState.listEvents({ projectId: url.searchParams.get("projectId"), type: url.searchParams.get("type"), limit: url.searchParams.get("limit") }) });
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/ops/deliveries") {
+    if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+    return json(res, 200, { ok: true, readOnly: true, deliveries: projectState.listDeliveries({ projectId: url.searchParams.get("projectId"), status: url.searchParams.get("status"), limit: url.searchParams.get("limit") }) });
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/gmail/intake/poll") {
+    if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+    try {
+      return json(res, 200, await pollGmailIntake());
+    } catch (error) {
+      console.error(`Gmail intake poll failed: ${error.message}`);
+      return json(res, 502, { ok: false, error: "Gmail intake poll failed", detail: error.message });
     }
   }
 
@@ -1442,4 +1679,8 @@ server.listen(PORT, "0.0.0.0", () => {
   setInterval(pollClientQuotes, Number(process.env.CLIENT_QUOTE_POLL_MS) || 60000).unref();
   setTimeout(pollFollowUps, 10000).unref();
   setInterval(pollFollowUps, Number(process.env.FOLLOW_UP_POLL_MS) || 60000).unref();
+  if (gmailIntakePollEnabled()) {
+    setTimeout(() => pollGmailIntake().catch((error) => console.error(`Gmail intake poll failed: ${error.message}`)), 12000).unref();
+    setInterval(() => pollGmailIntake().catch((error) => console.error(`Gmail intake poll failed: ${error.message}`)), Number(process.env.GMAIL_INTAKE_POLL_MS) || 120000).unref();
+  }
 });

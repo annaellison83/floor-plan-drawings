@@ -1,0 +1,141 @@
+const OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
+const GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me";
+
+function clean(value) { return value === undefined || value === null ? "" : String(value).trim(); }
+function list(value) { return clean(value).split(",").map((item) => item.trim().toLowerCase()).filter(Boolean); }
+
+function gmailConfig(env = process.env) {
+  return {
+    clientId: clean(env.GMAIL_CLIENT_ID), clientSecret: clean(env.GMAIL_CLIENT_SECRET),
+    refreshToken: clean(env.GMAIL_REFRESH_TOKEN), accessToken: clean(env.GMAIL_ACCESS_TOKEN),
+    intakeLabelId: clean(env.GMAIL_INTAKE_LABEL_ID), intakeQuery: clean(env.GMAIL_INTAKE_QUERY),
+    maxResults: Math.max(1, Math.min(100, Number(env.GMAIL_INTAKE_MAX_RESULTS) || 25)),
+    agentEmails: list(env.GMAIL_AGENT_EMAILS), clientEmails: list(env.GMAIL_CLIENT_EMAILS)
+  };
+}
+
+function isGmailConfigured(env = process.env) {
+  const config = gmailConfig(env);
+  return Boolean(config.intakeLabelId && ((config.clientId && config.clientSecret && config.refreshToken) || config.accessToken));
+}
+
+function decodeBase64Url(value) {
+  if (!value) return "";
+  return Buffer.from(String(value).replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
+}
+
+function headerMap(headers = []) {
+  return headers.reduce((result, header) => {
+    const name = clean(header.name).toLowerCase();
+    if (name && !(name in result)) result[name] = clean(header.value);
+    return result;
+  }, {});
+}
+
+function addressParts(value) {
+  const raw = clean(value);
+  const matches = [...raw.matchAll(/(?:^|,|\s)(?:"?([^"<,]+?)"?\s*)?<([^>]+)>|(?:^|,|\s)([\w.+-]+@[\w.-]+\.[A-Za-z]{2,})/g)];
+  const result = [];
+  for (const match of matches) {
+    const email = clean(match[2] || match[3]).toLowerCase();
+    if (!email || result.some((item) => item.email === email)) continue;
+    result.push({ name: clean(match[1]), email });
+  }
+  return result;
+}
+
+function classifyContacts({ from = [], to = [], cc = [], agentEmails = [], clientEmails = [] } = {}) {
+  const agentSet = new Set(agentEmails.map((item) => clean(item).toLowerCase()).filter(Boolean));
+  const clientSet = new Set(clientEmails.map((item) => clean(item).toLowerCase()).filter(Boolean));
+  const classify = (contact) => ({ ...contact, role: agentSet.has(contact.email) ? "agent" : clientSet.has(contact.email) ? "client" : "unknown" });
+  const contacts = [...from, ...to, ...cc].map(classify);
+  return {
+    // Never infer that a sender is the client; resolve this per project when needed.
+    source: from[0] ? classify(from[0]) : null,
+    agent: contacts.filter((contact) => contact.role === "agent"),
+    client: contacts.filter((contact) => contact.role === "client"),
+    unknown: contacts.filter((contact) => contact.role === "unknown")
+  };
+}
+
+function collectBodies(part, result = { text: [], html: [] }) {
+  if (!part) return result;
+  const mime = clean(part.mimeType).toLowerCase();
+  if (part.body && part.body.data && mime === "text/plain") result.text.push(decodeBase64Url(part.body.data));
+  if (part.body && part.body.data && mime === "text/html") result.html.push(decodeBase64Url(part.body.data));
+  for (const child of part.parts || []) collectBodies(child, result);
+  return result;
+}
+
+function parseGmailMessage(message, options = {}) {
+  const headers = headerMap(message && message.payload && message.payload.headers);
+  const bodies = collectBodies(message && message.payload);
+  const from = addressParts(headers.from), to = addressParts(headers.to), cc = addressParts(headers.cc);
+  return {
+    id: clean(message && message.id), threadId: clean(message && message.threadId), historyId: clean(message && message.historyId),
+    internalDate: Number(message && message.internalDate) || null,
+    messageId: headers["message-id"], inReplyTo: headers["in-reply-to"], references: headers.references,
+    subject: headers.subject, date: headers.date, from, to, cc, replyTo: addressParts(headers["reply-to"]),
+    contacts: classifyContacts({ from, to, cc, agentEmails: options.agentEmails || [], clientEmails: options.clientEmails || [] }),
+    text: bodies.text.join("\n\n").trim(), html: bodies.html.join("\n").trim(),
+    labelIds: Array.isArray(message && message.labelIds) ? [...message.labelIds] : [], raw: message
+  };
+}
+
+async function jsonFetch(fetchImpl, url, options = {}) {
+  const response = await fetchImpl(url, options);
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = body && body.error && (body.error.message || body.error_description);
+    throw new Error(`Gmail request failed (${response.status})${message ? `: ${message}` : ""}`);
+  }
+  return body;
+}
+
+function createGmailClient({ env = process.env, fetchImpl = fetch } = {}) {
+  const config = gmailConfig(env); let accessToken = config.accessToken; let tokenPromise;
+  async function token() {
+    if (accessToken) return accessToken;
+    if (!config.clientId || !config.clientSecret || !config.refreshToken) throw new Error("Gmail OAuth is not configured");
+    if (!tokenPromise) {
+      tokenPromise = jsonFetch(fetchImpl, OAUTH_TOKEN_URL, {
+        method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ client_id: config.clientId, client_secret: config.clientSecret, refresh_token: config.refreshToken, grant_type: "refresh_token" })
+      }).then((body) => { accessToken = clean(body.access_token); if (!accessToken) throw new Error("Gmail OAuth response did not include an access token"); return accessToken; }).finally(() => { tokenPromise = null; });
+    }
+    return tokenPromise;
+  }
+  async function api(path, options = {}) {
+    const currentToken = await token();
+    return jsonFetch(fetchImpl, `${GMAIL_API}${path}`, { ...options, headers: { Authorization: `Bearer ${currentToken}`, Accept: "application/json", ...(options.headers || {}) } });
+  }
+  return {
+    config,
+    async listMessages({ labelId = config.intakeLabelId, query = config.intakeQuery, pageToken, maxResults = config.maxResults } = {}) {
+      const params = new URLSearchParams({ maxResults: String(Math.max(1, Math.min(100, maxResults))) });
+      if (labelId) params.set("labelIds", labelId); if (query) params.set("q", query); if (pageToken) params.set("pageToken", pageToken);
+      return api(`/messages?${params}`);
+    },
+    async getMessage(id) { if (!clean(id)) throw new Error("A Gmail message ID is required"); return api(`/messages/${encodeURIComponent(id)}?format=full`); },
+    async modifyLabels(id, { addLabelIds = [], removeLabelIds = [] } = {}) {
+      return api(`/messages/${encodeURIComponent(id)}/modify`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addLabelIds, removeLabelIds }) });
+    }
+  };
+}
+
+function createMemoryIdempotencyStore() { const seen = new Set(); return { async has(key) { return seen.has(clean(key)); }, async mark(key) { seen.add(clean(key)); } }; }
+
+async function processIntakeMessages({ client, onMessage, store = createMemoryIdempotencyStore(), parser = parseGmailMessage, options = {}, listOptions = {} } = {}) {
+  if (!client || typeof client.listMessages !== "function" || typeof client.getMessage !== "function") throw new Error("A Gmail client is required");
+  if (typeof onMessage !== "function") throw new Error("onMessage is required");
+  const listed = await client.listMessages(listOptions), processed = [], skipped = [];
+  for (const item of listed.messages || []) {
+    const id = clean(item && item.id); if (!id) continue;
+    const key = `gmail:${id}`;
+    if (await store.has(key)) { skipped.push(id); continue; }
+    const message = parser(await client.getMessage(id), options); await onMessage(message); await store.mark(key); processed.push(message);
+  }
+  return { processed, skipped, nextPageToken: listed.nextPageToken || "" };
+}
+
+module.exports = { addressParts, classifyContacts, createGmailClient, createMemoryIdempotencyStore, gmailConfig, isGmailConfigured, parseGmailMessage, processIntakeMessages };

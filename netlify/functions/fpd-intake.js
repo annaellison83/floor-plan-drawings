@@ -270,6 +270,49 @@ async function maybeNotify(url, payload) {
   }
 }
 
+function renderIntakeConfig() {
+  return {
+    url: cleanEnv(process.env.RENDER_INTAKE_URL),
+    token: cleanEnv(process.env.RENDER_INTAKE_TOKEN)
+  };
+}
+
+async function maybeCreateRenderRecord(fields) {
+  const { url, token } = renderIntakeConfig();
+  if (!url || !token) return { ok: false, skipped: true };
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        "X-Intake-Idempotency-Key": clean(fields["Job ID"])
+      },
+      body: JSON.stringify({
+        version: 1,
+        source: "netlify-fpd-intake",
+        idempotencyKey: clean(fields["Job ID"]),
+        fields
+      }),
+      signal: controller.signal
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok || !body.ok || !body.id) {
+      console.warn("Render intake rejected request; using Airtable fallback", response.status);
+      return { ok: false, status: response.status, body };
+    }
+    return { ok: true, ...body };
+  } catch (error) {
+    console.warn("Render intake unavailable; using Airtable fallback", error.name === "AbortError" ? "timeout" : error.message);
+    return { ok: false, error: error.message };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function unknownFieldName(errorBody) {
   const message = errorBody && errorBody.error && errorBody.error.message;
   if (!message) return "";
@@ -279,6 +322,24 @@ function unknownFieldName(errorBody) {
 }
 
 async function createAirtableRecord(airtableUrl, token, fields) {
+  const jobId = clean(fields["Job ID"]);
+  if (jobId) {
+    try {
+      const lookupUrl = new URL(airtableUrl);
+      lookupUrl.searchParams.set("filterByFormula", `{Job ID}='${jobId.replaceAll("'", "\\'")}'`);
+      lookupUrl.searchParams.set("maxRecords", "1");
+      const lookupResponse = await fetch(lookupUrl.href, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const lookupBody = await lookupResponse.json().catch(() => ({}));
+      const existing = Array.isArray(lookupBody.records) && lookupBody.records[0];
+      if (lookupResponse.ok && existing) return { airtableBody: existing, omittedFields: [], duplicate: true };
+    } catch (error) {
+      // A lookup failure must not prevent the legacy fallback from attempting
+      // the create; the Render path remains the primary idempotency guard.
+      console.warn("Airtable idempotency lookup failed", error.message);
+    }
+  }
   const remainingFields = { ...fields };
   const omittedFields = [];
 
@@ -561,13 +622,6 @@ exports.handler = async (event) => {
   const tableName = cleanEnv(process.env.AIRTABLE_JOBS_TABLE) || "Jobs";
   const pricingTable = cleanEnv(process.env.AIRTABLE_PRICING_TABLE) || "Quote Pricing";
 
-  if (!token || !baseId) {
-    return json(500, {
-      ok: false,
-      error: "Missing AIRTABLE_TOKEN or AIRTABLE_BASE_ID"
-    });
-  }
-
   let data;
   try {
     data = JSON.parse(event.body || "{}");
@@ -581,8 +635,58 @@ exports.handler = async (event) => {
     return json(400, { ok: false, error: "Property address is required" });
   }
 
+  const renderResult = await maybeCreateRenderRecord(fields);
+  if (renderResult.ok) {
+    // Keep enrichment and the existing webhook notification compatible while
+    // Render takes ownership of the initial Airtable write. If Netlify no
+    // longer has Airtable credentials, the Render-created record is still a
+    // valid accepted intake and Render's normal polling will process it.
+    let enrichment = { ok: false, research: null };
+    let recordUrl = "";
+    if (token && baseId) {
+      const airtableUrl = `${AIRTABLE_API_URL}/${baseId}/${encodeURIComponent(tableName)}`;
+      recordUrl = `${airtableUrl}/${encodeURIComponent(renderResult.id)}`;
+      if (!renderResult.duplicate) {
+        enrichment = await enrichCreatedRecord(
+          recordUrl,
+          token,
+          fields,
+          clean(fields["Website Workflow"]),
+          baseId,
+          pricingTable
+        );
+      }
+      if (!renderResult.duplicate) {
+        await maybeNotify(process.env.NOTIFY_WEBHOOK_URL, {
+          text: `New ${data.workflow || data.request || "website request"}: ${fields["Property Address"]}`,
+          recordId: renderResult.id,
+          status: fields.Status,
+          fields
+        });
+      }
+    }
+    return json(200, {
+      ok: true,
+      source: "render-intake",
+      persistence: "airtable",
+      duplicate: Boolean(renderResult.duplicate),
+      id: renderResult.id,
+      status: renderResult.status || fields.Status,
+      address: renderResult.address || fields["Property Address"],
+      omittedFields: renderResult.omittedFields || [],
+      propertyResearch: enrichment.ok ? enrichment.research.status : "Queued for Render workflow"
+    });
+  }
+
+  if (!token || !baseId) {
+    return json(500, {
+      ok: false,
+      error: "Render intake unavailable and missing AIRTABLE_TOKEN or AIRTABLE_BASE_ID"
+    });
+  }
+
   const airtableUrl = `${AIRTABLE_API_URL}/${baseId}/${encodeURIComponent(tableName)}`;
-  const { airtableBody, omittedFields, error } = await createAirtableRecord(airtableUrl, token, fields);
+  const { airtableBody, omittedFields, error, duplicate } = await createAirtableRecord(airtableUrl, token, fields);
 
   if (error) {
     return json(502, {
@@ -593,24 +697,29 @@ exports.handler = async (event) => {
   }
 
   const recordUrl = `${airtableUrl}/${encodeURIComponent(airtableBody.id)}`;
-  const enrichment = await enrichCreatedRecord(
-    recordUrl,
-    token,
-    fields,
-    clean(fields["Website Workflow"]),
-    baseId,
-    pricingTable
-  );
+  const enrichment = duplicate
+    ? { ok: false, research: null }
+    : await enrichCreatedRecord(
+      recordUrl,
+      token,
+      fields,
+      clean(fields["Website Workflow"]),
+      baseId,
+      pricingTable
+    );
 
-  await maybeNotify(process.env.NOTIFY_WEBHOOK_URL, {
-    text: `New ${data.workflow || data.request || "website request"}: ${fields["Property Address"]}`,
-    recordId: airtableBody.id,
-    status: fields.Status,
-    fields
-  });
+  if (!duplicate) {
+    await maybeNotify(process.env.NOTIFY_WEBHOOK_URL, {
+      text: `New ${data.workflow || data.request || "website request"}: ${fields["Property Address"]}`,
+      recordId: airtableBody.id,
+      status: fields.Status,
+      fields
+    });
+  }
 
   return json(200, {
     ok: true,
+    duplicate: Boolean(duplicate),
     id: airtableBody.id,
     status: fields.Status,
     address: fields["Property Address"],
@@ -620,3 +729,5 @@ exports.handler = async (event) => {
 };
 
 exports.calculateSuggestedQuote = calculateSuggestedQuote;
+exports.buildAirtableFields = buildAirtableFields;
+exports.maybeCreateRenderRecord = maybeCreateRenderRecord;

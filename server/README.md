@@ -20,6 +20,9 @@ Set these in the Render service, never in GitHub:
 - `ICLOUD_EMAIL`: Anna's iCloud/Apple Account email
 - `ICLOUD_APP_PASSWORD`: Anna's app-specific password
 - `INTERNAL_ADMIN_TOKEN`: a separate random token for the private test endpoint
+- `RENDER_INTAKE_TOKEN`: a separate random shared secret used only by the
+  Netlify website intake function. Set the same value in the Netlify site
+  environment and Render; do not reuse `INTERNAL_ADMIN_TOKEN`.
 
 The iCloud endpoint is:
 
@@ -27,6 +30,36 @@ The iCloud endpoint is:
 
 Send the admin token in the `X-Admin-Token` header. The endpoint returns
 calendar names and CalDAV URLs, but never returns the iCloud password.
+
+## Website intake handoff
+
+Netlify remains the public form runtime. When `RENDER_INTAKE_URL` and
+`RENDER_INTAKE_TOKEN` are configured, `netlify/functions/fpd-intake.js` sends
+the normalized submission to Render first:
+
+`POST /api/intake`
+
+Render authenticates the `Authorization: Bearer ...` header, validates the
+versioned `netlify-fpd-intake` envelope, and creates the Airtable Jobs record
+with an idempotent `Job ID` lookup. It returns the Airtable record ID so the
+existing Netlify property-research enrichment can continue during the
+migration. If Render is unreachable, rejects the request, or the handoff
+variables are not set, Netlify uses its existing direct Airtable create path.
+
+Set these values in both providers (with a newly generated random value for
+the token):
+
+```text
+# Render and Netlify
+RENDER_INTAKE_TOKEN=<same random secret, entered in provider UIs>
+
+# Netlify only
+RENDER_INTAKE_URL=https://floor-plan-drawings.onrender.com/api/intake
+```
+
+The endpoint never accepts browser traffic without the shared secret and does
+not log request contents or credentials. A duplicate `Job ID` returns the
+existing record instead of creating a second job.
 
 The read-only roster endpoint is:
 
@@ -69,6 +102,35 @@ The approved client email can be inspected without delivery at
 `format=html` for a browser preview). It is protected by `X-Admin-Token` and
 does not change Airtable.
 
+## Render project state and delivery audit
+
+Render maintains a canonical project/event/delivery boundary in
+`server/project-state.js`. It is deliberately compatible with Airtable
+shadow mode: Airtable communication logs remain the rollback record while
+Render also records idempotent delivery reservations and outcomes. Set
+`STATE_FILE` to a mounted private path if this state should survive a service
+restart; without it, the service uses an in-memory store and Airtable remains
+the recovery source during the migration.
+
+The protected operational endpoints are read-only unless noted:
+
+- `GET /api/ops/projects` — current project state
+- `POST /api/ops/projects` — upsert an intake/project envelope
+- `GET /api/ops/events` — project lifecycle/audit events
+- `GET /api/ops/deliveries` — delivery reservations and outcomes
+- `GET /api/ops/delivery-failures` — Airtable delivery failures
+
+All require `X-Admin-Token`. State stores only contact addresses, project
+metadata, and delivery metadata; it never stores passwords, tokens, message
+bodies, or credentials.
+
+Client and agent contacts are separate. If both are present and no explicit
+recipient policy is stored on the project, client-facing quote, appointment,
+confirmation, and reminder sends are blocked for Anna to clarify. Supported
+policies are `client`, `agent`, `both`, `internal`, and `custom`. This avoids
+ever assuming that the person who submitted a request should receive the
+client-facing confirmation.
+
 Each workflow also has a shadow switch (`SHADOW_NEW_REQUEST`,
 `SHADOW_PROPERTY_REVIEW`, `SHADOW_QUOTE_READY`, `SHADOW_CLIENT_QUOTE`, or
 `SHADOW_FOLLOW_UP`). Shadow mode reads candidates and renders the message but
@@ -108,3 +170,34 @@ tentative event only on a roster worker calendar. The request must include a
 `worker`, `jobKey`, `start`, `end`, and `expiresAt` (future, within 24 hours).
 `DELETE /api/icloud/appointments/hold` releases a hold by `holdId` and worker.
 Both endpoints require the admin token; Home and Reminders can never be used.
+
+## Gmail intake runtime (staged)
+
+`server/gmail-runtime.js` is the production-safe Gmail API boundary for the
+future inbound workflow. It uses a separately authorized OAuth refresh token
+(not the Codex Gmail connector and not an SMTP app password), reads only the
+configured intake label, preserves Gmail message and thread IDs, and exposes an
+idempotent processing hook. Configure `GMAIL_INTAKE_LABEL_ID` with the ID of
+`[00] FPD Intake`; do not use the display name as the ID.
+
+The parser keeps the sender (`contacts.source`) separate from
+`contacts.agent` and `contacts.client`. Only explicitly configured addresses
+in `GMAIL_AGENT_EMAILS` and `GMAIL_CLIENT_EMAILS` receive those roles; unknown
+contacts remain unknown so Render cannot accidentally send a client-facing
+message to an agent. This module is scaffolding until the OAuth credential,
+project database, and durable idempotency store are provisioned.
+
+When the production OAuth values are ready, the protected endpoint
+`POST /api/gmail/intake/poll` runs one idempotent intake pass. It creates a
+Render project with the Gmail thread ID and keeps unknown contacts unknown;
+it never assumes the sender is the client. Set `ENABLE_GMAIL_INTAKE_POLL=true`
+to run the same pass every two minutes (or set `GMAIL_INTAKE_POLL_MS`).
+Optionally set `GMAIL_PROCESSED_LABEL_ID` to add a separate processed label;
+the intake label is never removed automatically.
+
+The current project-state store is durable only when `STATE_FILE` points at a
+persistent Render disk. Until that is provisioned, Airtable remains the
+recovery source and the Gmail poller should stay disabled.
+
+`GET /healthz` reports this as `integrations.renderStateDurable`; it is `false`
+when the service is using the in-memory safety mode.
