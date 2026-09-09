@@ -276,7 +276,10 @@ async function deliverGmailIntakeNotification(project, message) {
       subject: message.subject ? `Re: ${message.subject.replace(/^re:\s*/i, "")}` : email.subject,
       html: email.html,
       text: email.text,
-      headers: threadHeaders ? { "In-Reply-To": message.messageId, References: threadHeaders } : undefined
+      headers: threadHeaders ? {
+        ...(message.messageId ? { "In-Reply-To": message.messageId } : {}),
+        References: threadHeaders
+      } : undefined
     });
     projectState.updateDelivery(reservation.delivery.idempotencyKey, { status: "sent", attempts: delivery.attempts, provider: delivery.provider, messageId: delivery.messageId });
     return { ok: true, delivery: "sent", messageId: delivery.messageId };
