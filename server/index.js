@@ -10,7 +10,7 @@ const {
 const { buildRoster } = require("./calendar-roster");
 const { appointmentDurationMinutes, deliveryTargetForWeekday, schedulingPolicy } = require("./scheduling-policy");
 const { planAppointments } = require("./appointment-planner");
-const { calendarAirtableFields, calendarEventKey, extractAddress, findProjectMatch, jobIdForCalendarEvent, normalizeAddress } = require("./calendar-sync");
+const { calendarAirtableFields, calendarEventKey, extractAddress, findProjectMatch, isLikelyWorkEvent, normalizeAddress } = require("./calendar-sync");
 const { proposalPayload, signProposal, verifyProposal } = require("./appointment-proposals");
 const { hasFallbackSmtp, isSmtpConfigured, sendFailureAlert, sendMail, verifySmtp } = require("./mail");
 const { projectState, recipientsFor } = require("./project-state");
@@ -297,9 +297,14 @@ async function syncCalendarToAirtable(input = {}) {
   const renderProjects = projectState.listProjects({ limit: 500 });
   const airtableRecords = await listJobs({ maxRecords: 500 });
   const results = [];
+  const skipped = [];
   for (const result of calendarResults) {
     for (const event of result.events || []) {
       const calendar = result.calendar;
+      if (!isLikelyWorkEvent(event)) {
+        skipped.push({ calendar: calendar.name, uid: clean(event.uid), summary: clean(event.summary), reason: "No work marker or property address" });
+        continue;
+      }
       const key = calendarEventKey(calendar, event);
       const project = findProjectMatch(event, calendar, renderProjects);
       const fields = calendarAirtableFields(calendar, event, project);
@@ -354,7 +359,7 @@ async function syncCalendarToAirtable(input = {}) {
       });
     }
   }
-  return { ok: true, readOnly: dryRun, startDate: range.startDate, days: range.days, calendars: calendars.map((calendar) => calendar.name), imported: results.filter((item) => item.action === "create").length, matched: results.filter((item) => item.action === "matched").length, results };
+  return { ok: true, readOnly: dryRun, startDate: range.startDate, days: range.days, calendars: calendars.map((calendar) => calendar.name), imported: results.filter((item) => item.action === "create").length, matched: results.filter((item) => item.action === "matched").length, skipped: skipped.length, skippedEvents: skipped, results };
 }
 
 async function pollCalendarAirtableSync() {

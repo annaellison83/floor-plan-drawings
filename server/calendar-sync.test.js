@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { calendarAirtableFields, calendarEventKey, extractAddress, findProjectMatch, jobIdForCalendarEvent, normalizeAddress } = require("./calendar-sync");
+const { calendarAirtableFields, calendarEventKey, extractAddress, findProjectMatch, isLikelyWorkEvent, jobIdForCalendarEvent, normalizeAddress } = require("./calendar-sync");
 
 const calendar = { name: "Corrie", url: "https://caldav.example/corrie/" };
 const event = {
@@ -19,6 +19,7 @@ test("calendar event identity stays stable if an event is moved", () => {
 
 test("calendar sync extracts an address and matches a Gmail project", () => {
   assert.equal(extractAddress(event), "123 Main St, Los Angeles, CA 90065");
+  assert.equal(extractAddress({ summary: "2380 lake view ave steve chetelat 11am" }), "2380 lake view ave");
   assert.equal(normalizeAddress("123 Main Street, Los Angeles, CA 90065"), normalizeAddress("123 Main St, Los Angeles, CA 90065"));
   const project = findProjectMatch(event, calendar, [{
     id: "gmail-thread-1",
@@ -27,6 +28,11 @@ test("calendar sync extracts an address and matches a Gmail project", () => {
     contacts: { client: ["client@example.com"] }
   }]);
   assert.equal(project.id, "gmail-thread-1");
+});
+
+test("calendar sync skips obvious personal events", () => {
+  assert.equal(isLikelyWorkEvent({ summary: "camping" }), false);
+  assert.equal(isLikelyWorkEvent({ summary: "140 N Plymouth color yard ali jack" }), true);
 });
 
 test("calendar sync fields preserve the thread link and stable event identity", () => {

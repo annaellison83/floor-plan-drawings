@@ -22,11 +22,17 @@ function extractAddress(event = {}) {
   const candidates = [event.location, event.summary, event.description]
     .flatMap((value) => clean(value).split(/[\n|•]+/).map(clean));
   for (const candidate of candidates) {
-    if (looksLikeAddress(candidate)) return candidate;
-    const match = candidate.match(/\b\d{1,6}\s+[^,\n|]+?\b(?:street|st|avenue|ave|boulevard|blvd|drive|dr|road|rd|lane|ln|court|ct|place|pl|way|parkway|pkwy|circle|cir|terrace|ter|highway|hwy)\b(?:,\s*[^\n|]+)?/i);
+    const stateZip = candidate.match(/\b\d{1,6}(?:-\d{1,6})?\s+[^\n|]+?\b(?:CA|California)\s+\d{5}\b/i);
+    if (stateZip && looksLikeAddress(stateZip[0])) return stateZip[0];
+    const match = candidate.match(/\b\d{1,6}(?:-\d{1,6})?\s+[^,\n|]+?\b(?:street|st|avenue|ave|boulevard|blvd|drive|dr|road|rd|lane|ln|court|ct|place|pl|way|parkway|pkwy|circle|cir|terrace|ter|highway|hwy)\b(?:\s+\d{5})?/i);
     if (match && looksLikeAddress(match[0])) return match[0];
   }
   return "";
+}
+
+function isLikelyWorkEvent(event = {}) {
+  if (extractAddress(event)) return true;
+  return /\b(color|b\s*&?\s*w|black\s*and\s*white|floor\s*plan|fp|yard|matterport|site\s*map|tic|condo|apartment|drawing|property|client)\b/i.test([event.summary, event.description, event.location].map(clean).join(" "));
 }
 
 function calendarEventKey(calendar, event) {
@@ -86,4 +92,4 @@ function calendarAirtableFields(calendar, event, project = null) {
   };
 }
 
-module.exports = { calendarAirtableFields, calendarEventKey, extractAddress, findProjectMatch, jobIdForCalendarEvent, normalizeAddress };
+module.exports = { calendarAirtableFields, calendarEventKey, extractAddress, findProjectMatch, isLikelyWorkEvent, jobIdForCalendarEvent, normalizeAddress };
