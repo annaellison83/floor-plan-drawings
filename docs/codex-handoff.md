@@ -1,13 +1,15 @@
 # FloorPlanDrawings Codex Handoff
 
-Updated: 2026-09-03
+Updated: 2026-09-08
 
 ## Verified current state
 
 - Repository: `annaellison83/floor-plan-drawings`
 - Branch: `main`
-- Latest synced commit: `39aa44d` (`sync handoff after workflow cutover`)
-- `main` and the controlled `release` branch both point to `39aa44d`.
+- Latest synced commit: `5e91483` (`build Render workflow intake and Gmail runtime`)
+- `main` contains the Render intake handoff, Gmail runtime, project state, and
+  delivery-audit changes. The older `release` branch is not used for this
+  staged backend cutover.
 - Airtable remains the dashboard/source of truth. Render sends the migrated
   workflow emails. Netlify's $5 add-on pack has restored 500 credits for the
   current billing period, and `floorplandrawings.com` is serving normally
@@ -19,6 +21,13 @@ Updated: 2026-09-03
   previews remain enabled. Develop on `main`, review a preview, then merge or
   push `release` for an intentional production release after credits return.
 - Render health is passing with Airtable, Gmail SMTP, and iCloud integrations enabled. Gmail SMTP is the primary sender and the configured alternate SMTP path is available for bounded fallback delivery.
+- The public Netlify intake now attempts the protected Render `/api/intake`
+  endpoint first using a shared `RENDER_INTAKE_TOKEN`, with the existing
+  Airtable write retained as a fail-safe fallback.
+- A Gmail API intake runtime is implemented but intentionally disabled until
+  Anna enters a separate least-privilege Google OAuth refresh token in Render.
+  It reads only the `[00] FPD Intake` label, preserves Gmail message/thread
+  IDs, and never assumes an unknown sender is the client.
 - Protected read-only iCloud discovery and roster endpoints are live. The roster classifies `anna` as owner, `corrie`, `sarah`, and `ricardo` as workers, and excludes `Home` and `Reminders`.
 - Read-only worker availability is live at `/api/icloud/availability`; the dry-run planner is live at `/api/icloud/appointments/dry-run`.
 - The internal appointment-proposal board is available for test-only use. Anna
@@ -39,7 +48,12 @@ Updated: 2026-09-03
 
 ## Email and quote safeguards
 
-`netlify/functions/fpd-intake.js` writes the submission to Airtable before any notification is attempted. Render polls Airtable every minute, reserves a Communication Log row before sending, retries failed sends while the job remains `Not Sent`, and stamps `Sent` only after Gmail SMTP accepts the message. Duplicate sends are blocked by the Communication Log reservation.
+`netlify/functions/fpd-intake.js` attempts the protected Render intake first and
+falls back to Airtable if Render is unavailable. Render and the existing
+pollers reserve a Communication Log row before sending, retry failed sends
+while the job remains `Not Sent`, and stamp `Sent` only after Gmail SMTP
+accepts the message. Duplicate sends are blocked by both the Communication Log
+reservation and Render's delivery ledger.
 
 The approval page now saves edits with confirmation, records manually entered size as `Anna confirmed during quote review`, and links directly to the expanded Airtable job after approval. Automatic quote zones are persisted from the two-hub distance resolver; manual Airtable zones still override them.
 
@@ -54,7 +68,10 @@ and controlled migration.
 
 ## Connector status
 
-- Gmail connector installed locally, but Google authentication is incomplete. Render Gmail SMTP is configured separately; do not request or paste the Gmail password or tokens into chat.
+- Gmail connector is connected locally for inspection. Render Gmail SMTP is
+  configured separately. The production Gmail API poller still needs its
+  OAuth client/refresh-token environment values; do not request or paste the
+  Gmail password or tokens into chat.
 - Airtable CLI authentication is verified with a PAT restricted to the Floor Plan Drawings Command Center base. The automation audit is recorded in `docs/airtable-automation-migration.md`.
 - Airtable's Codex connector is now connected to the `Floor Plan Drawings
   Command Center` base (`appBq1xl0G5vCegAH`) in read-only audit mode. The
@@ -70,11 +87,19 @@ and controlled migration.
 
 ## Next safe steps
 
-1. Add an automatic, delayed Airtable-sender fallback for QUOTE READY after a Render/Gmail failure, with an idempotent claim field.
-2. Add a separate-channel alert for jobs that remain unsent beyond the retry window.
-3. Keep the current disabled Airtable QUOTE READY flow available as a manual rollback until the independent fallback is tested.
-4. Finish the iCloud custom-domain DNS cutover only after deciding whether Bluehost will continue hosting DNS.
-5. Review the first real appointment proposal end-to-end. Client selections
+1. Set `RENDER_INTAKE_TOKEN` identically in Netlify and Render, then verify a
+   controlled website submission reaches `/api/intake`.
+2. Mount a persistent Render disk and set `STATE_FILE`; `/healthz` reports
+   `integrations.renderStateDurable=false` until this is done.
+3. Enter Google OAuth values directly in Render, set `GMAIL_INTAKE_LABEL_ID`
+   to the `[00] FPD Intake` label ID, and leave `ENABLE_GMAIL_INTAKE_POLL=false`
+   for the first manual poll. Turn on the timer only after that pass is
+   reviewed.
+4. Add an automatic, delayed Airtable-sender fallback for QUOTE READY after a Render/Gmail failure, with an idempotent claim field.
+5. Add a separate-channel alert for jobs that remain unsent beyond the retry window.
+6. Keep the current Airtable automations available as manual rollback until the independent fallback is tested.
+7. Finish the iCloud custom-domain DNS cutover only after deciding whether Bluehost will continue hosting DNS.
+8. Review the first real appointment proposal end-to-end. Client selections
    are logged for Anna while holds remain disabled; enable provisional holds
    only after the selection and rollback path are approved.
 
