@@ -227,8 +227,11 @@ and sends one reminder in the 20–28 hour window before the stored appointment.
 read-only reconciliation of Anna's and the workers' iCloud calendars. It
 excludes Home and Reminders, extracts addresses when present, matches existing
 Render projects and Airtable Jobs, and reports which events would be created
-versus matched. Gmail projects are matched by normalized property address and
-retain their Gmail thread ID in the proposed Airtable listing.
+versus matched. Existing Render projects are matched by normalized property
+address. When no Render project matches, Render performs a read-only Gmail
+search across all labels for the property address; an exact/strong match carries
+the Gmail thread ID (and only explicitly classified client contact details) into
+the proposed Airtable listing. No Gmail labels, messages, or threads are changed.
 
 The pass is deliberately dry-run by default. After reviewing one controlled
 result, set `ENABLE_CALENDAR_AIRTABLE_SYNC=true` and run the protected endpoint

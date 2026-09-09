@@ -41,8 +41,11 @@ disabled as part of the preparatory work.
     review email with a Gmail-thread link after `ENABLE_GMAIL_INTAKE_NOTIFICATIONS`
    is enabled.
 13. A calendar-to-Airtable reconciliation pass is staged in dry-run mode. It
-    imports owner/worker iCloud events, matches Gmail/Render projects by
-    address, and uses stable calendar UID keys to prevent duplicate Jobs.
+    imports owner/worker iCloud events, skips obvious personal events, matches
+    Render projects by address, and performs a read-only all-label Gmail search
+    when no Render project matches. Any strong Gmail match carries the thread ID
+    into the proposed Airtable listing; stable calendar UID keys prevent duplicate
+    Jobs and no Gmail labels or messages are changed.
 
 ## Execution order
 
