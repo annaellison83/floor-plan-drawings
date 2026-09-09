@@ -304,7 +304,7 @@ async function pollGmailIntake() {
           ...project.contacts,
           client: parsed.contacts.client.map((contact) => contact.email),
           agent: parsed.contacts.agent.map((contact) => contact.email),
-          policy: parsed.contacts.client.length && !parsed.contacts.agent.length ? "client" : parsed.contacts.agent.length && !parsed.contacts.client.length ? "agent" : project.contacts.policy,
+          policy: parsed.contacts.client.length && !parsed.contacts.agent.length ? "client" : parsed.contacts.agent.length && !parsed.contacts.client.length ? "agent" : "internal",
           policyExplicit: Boolean(project.contacts.policyExplicit || parsed.contacts.client.length || parsed.contacts.agent.length)
         }
       });
