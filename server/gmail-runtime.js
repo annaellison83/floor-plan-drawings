@@ -67,6 +67,54 @@ function collectBodies(part, result = { text: [], html: [] }) {
   return result;
 }
 
+const STREET_SUFFIX = /\b(?:street|st|avenue|ave|boulevard|blvd|drive|dr|road|rd|lane|ln|court|ct|place|pl|way|parkway|pkwy|circle|cir|terrace|ter|highway|hwy)\b/i;
+
+function titleCase(value) {
+  return clean(value).replace(/\b([a-z])/gi, (match) => match.toUpperCase());
+}
+
+function looksLikeAddress(value) {
+  const candidate = clean(value);
+  return /^\d{1,6}\s+\S+(?:\s+\S+){1,10}$/i.test(candidate)
+    && (STREET_SUFFIX.test(candidate) || /^\d{1,6}\s+[A-Za-z]+(?:\s+[A-Za-z]+)?$/i.test(candidate));
+}
+
+function addressFromPropertyUrl(text) {
+  const match = clean(text).match(/https?:\/\/[^\s<>]+\/(?:listing|homedetails)\/([^\s<>?#]+)/i);
+  if (!match) return "";
+  const slug = decodeURIComponent(match[1]).replace(/[-_]+/g, " ").replace(/\s+zpid\b.*$/i, "").trim();
+  const stateZip = slug.match(/\b([A-Z]{2})\s+(\d{5})(?:\b|$)/i);
+  if (!stateZip) return "";
+  const before = clean(slug.slice(0, stateZip.index));
+  if (!before) return "";
+  return `${titleCase(before)}, ${stateZip[1].toUpperCase()} ${stateZip[2]}`;
+}
+
+function extractPropertyAddress(subject, text) {
+  const headline = clean(subject).replace(/^re:\s*/i, "");
+  const pipeParts = headline.split("|").map(clean);
+  if (pipeParts.length >= 3 && looksLikeAddress(pipeParts[1])) return pipeParts[1];
+  const dashAddress = headline.match(/^(.+?)\s+-\s+(?:site map|floor plan|property)\s+requested\b/i);
+  if (dashAddress && clean(dashAddress[1])) return clean(dashAddress[1]);
+  const lines = clean(text).split(/\r?\n/).map(clean).filter(Boolean);
+  for (let index = 0; index < lines.length; index += 1) {
+    if (/^https?:\/\//i.test(lines[index]) || /^<https?:\/\//i.test(lines[index])) {
+      const previous = lines[index - 1] || "";
+      if (looksLikeAddress(previous)) return previous;
+      const fromUrl = addressFromPropertyUrl(lines[index]);
+      if (fromUrl) return fromUrl;
+    }
+  }
+  return lines.find(looksLikeAddress) || "";
+}
+
+function extractClientName(subject, text) {
+  const parts = clean(subject).replace(/^re:\s*/i, "").split("|").map(clean);
+  if (parts.length >= 3 && parts[2] && !/requested|needed/i.test(parts[2])) return parts[2];
+  const listingMatch = clean(text).match(/\b(?:listing|project|property)\s*(?:for|by|with)?\s*:\s*([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){1,3})\b/);
+  return listingMatch ? listingMatch[1] : "";
+}
+
 function parseGmailMessage(message, options = {}) {
   const headers = headerMap(message && message.payload && message.payload.headers);
   const bodies = collectBodies(message && message.payload);
@@ -77,6 +125,8 @@ function parseGmailMessage(message, options = {}) {
     messageId: headers["message-id"], inReplyTo: headers["in-reply-to"], references: headers.references,
     subject: headers.subject, date: headers.date, from, to, cc, replyTo: addressParts(headers["reply-to"]),
     contacts: classifyContacts({ from, to, cc, agentEmails: options.agentEmails || [], clientEmails: options.clientEmails || [] }),
+    propertyAddress: extractPropertyAddress(headers.subject, bodies.text.join("\n\n")),
+    clientName: extractClientName(headers.subject, bodies.text.join("\n\n")),
     text: bodies.text.join("\n\n").trim(), html: bodies.html.join("\n").trim(),
     labelIds: Array.isArray(message && message.labelIds) ? [...message.labelIds] : [], raw: message
   };
@@ -138,4 +188,4 @@ async function processIntakeMessages({ client, onMessage, store = createMemoryId
   return { processed, skipped, nextPageToken: listed.nextPageToken || "" };
 }
 
-module.exports = { addressParts, classifyContacts, createGmailClient, createMemoryIdempotencyStore, gmailConfig, isGmailConfigured, parseGmailMessage, processIntakeMessages };
+module.exports = { addressParts, classifyContacts, createGmailClient, createMemoryIdempotencyStore, extractClientName, extractPropertyAddress, gmailConfig, isGmailConfigured, parseGmailMessage, processIntakeMessages };

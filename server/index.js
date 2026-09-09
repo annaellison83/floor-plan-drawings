@@ -12,7 +12,7 @@ const { planAppointments } = require("./appointment-planner");
 const { proposalPayload, signProposal, verifyProposal } = require("./appointment-proposals");
 const { hasFallbackSmtp, isSmtpConfigured, sendFailureAlert, sendMail, verifySmtp } = require("./mail");
 const { projectState, recipientsFor } = require("./project-state");
-const { createGmailClient, isGmailConfigured, processIntakeMessages } = require("./gmail-runtime");
+const { createGmailClient, isGmailConfigured, parseGmailMessage, processIntakeMessages } = require("./gmail-runtime");
 const {
   clientQuoteEmail,
   clientAvailabilityProposalEmail,
@@ -241,7 +241,8 @@ async function ingestGmailMessage(message) {
     sourceId: clean(message.threadId || message.id),
     status: "new",
     stage: "intake",
-    clientName: clientContacts[0] && clientContacts[0].name,
+    propertyAddress: message.propertyAddress,
+    clientName: message.clientName || (clientContacts[0] && clientContacts[0].name),
     contacts: {
       client: clientContacts.map((contact) => contact.email),
       agent: agentContacts.map((contact) => contact.email),
@@ -259,7 +260,6 @@ async function ingestGmailMessage(message) {
       receivedAt: message.date || message.internalDate,
       replyTo: (message.replyTo || []).map((contact) => contact.email),
       references: message.references,
-      textSnippet: clean(message.text).slice(0, 8000),
       intakeLabelIds: message.labelIds
     }
   });
@@ -277,8 +277,31 @@ async function pollGmailIntake() {
   const result = await processIntakeMessages({
     client,
     store,
-    onMessage: ingestGmailMessage
+    onMessage: ingestGmailMessage,
+    options: { agentEmails: client.config.agentEmails, clientEmails: client.config.clientEmails }
   });
+  // Re-enrich previously ingested Gmail projects after parser/config changes.
+  // This is read-only against Gmail and only updates missing structured fields.
+  for (const project of projectState.listProjects({}).filter((item) => item.source === "gmail" && item.metadata && item.metadata.gmailMessageId && (!item.propertyAddress || !item.clientName))) {
+    try {
+      const raw = await client.getMessage(project.metadata.gmailMessageId);
+      const parsed = parseGmailMessage(raw, { agentEmails: client.config.agentEmails, clientEmails: client.config.clientEmails });
+      projectState.upsertProject({
+        ...project,
+        propertyAddress: project.propertyAddress || parsed.propertyAddress,
+        clientName: project.clientName || parsed.clientName,
+        contacts: {
+          ...project.contacts,
+          client: parsed.contacts.client.map((contact) => contact.email),
+          agent: parsed.contacts.agent.map((contact) => contact.email),
+          policy: parsed.contacts.client.length && !parsed.contacts.agent.length ? "client" : parsed.contacts.agent.length && !parsed.contacts.client.length ? "agent" : project.contacts.policy,
+          policyExplicit: Boolean(project.contacts.policyExplicit || parsed.contacts.client.length || parsed.contacts.agent.length)
+        }
+      });
+    } catch (error) {
+      console.warn(`Gmail project enrichment failed for ${project.id}: ${error.message}`);
+    }
+  }
   const processed = result.processed.map((message) => ({ id: message.id, threadId: message.threadId, subject: message.subject }));
   if (clean(process.env.GMAIL_PROCESSED_LABEL_ID) && processed.length) {
     for (const message of result.processed) {
