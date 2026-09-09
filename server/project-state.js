@@ -49,7 +49,9 @@ function recipients(input = {}) {
   const internal = checkedEmails(input.internal || input.internalEmail, "internal");
   const custom = checkedEmails(input.custom || input.customEmail, "custom");
   const policyValue = clean(input.policy || input.recipientPolicy || "");
-  const policy = policyValue.toLowerCase() || "client";
+  // Never assume an unclassified intake sender is the client. Unknown or
+  // agent-only projects stay internal until Anna explicitly sets a policy.
+  const policy = policyValue.toLowerCase() || (client.length ? "client" : "internal");
   const allowedPolicies = new Set(["client", "agent", "both", "internal", "custom"]);
   if (!allowedPolicies.has(policy)) throw new Error("recipientPolicy must be client, agent, both, internal, or custom");
   return { client, agent, internal, custom, policy, policyExplicit: Boolean(input.policyExplicit || policyValue) };
