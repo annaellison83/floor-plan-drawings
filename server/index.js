@@ -3,12 +3,14 @@ const crypto = require("node:crypto");
 const {
   createProvisionalHold,
   discoverCalendars,
+  getCalendarEvents,
   getCalendarAvailability,
   releaseProvisionalHold
 } = require("./icloud");
 const { buildRoster } = require("./calendar-roster");
 const { appointmentDurationMinutes, deliveryTargetForWeekday, schedulingPolicy } = require("./scheduling-policy");
 const { planAppointments } = require("./appointment-planner");
+const { calendarAirtableFields, calendarEventKey, extractAddress, findProjectMatch, jobIdForCalendarEvent, normalizeAddress } = require("./calendar-sync");
 const { proposalPayload, signProposal, verifyProposal } = require("./appointment-proposals");
 const { hasFallbackSmtp, isSmtpConfigured, sendFailureAlert, sendMail, verifySmtp } = require("./mail");
 const { projectState, recipientsFor } = require("./project-state");
@@ -40,6 +42,7 @@ const {
   listNewRequestCandidates,
   listPropertyReviewCandidates,
   listQuoteReadyCandidates,
+  listJobs,
   communicationKey,
   updateCommunicationLog,
   updateJob
@@ -74,6 +77,7 @@ let followUpPollRunning = false;
 let followUpRunDate = "";
 const appointmentLifecycleLocks = new Set();
 let appointmentReminderPollRunning = false;
+let calendarSyncPollRunning = false;
 
 function clean(value) {
   return value === undefined || value === null ? "" : String(value).trim();
@@ -179,7 +183,8 @@ function integrationStatus() {
     appointmentProposalHoldEnabled: provisionalHoldEnabled(),
     appointmentConfirmationEnabled: appointmentConfirmationEnabled(),
     appointmentReminderEnabled: appointmentReminderEnabled(),
-    gmailIntakeNotificationEnabled: gmailIntakeNotificationEnabled()
+    gmailIntakeNotificationEnabled: gmailIntakeNotificationEnabled(),
+    calendarAirtableSyncEnabled: calendarAirtableSyncEnabled()
   };
 }
 
@@ -246,6 +251,123 @@ function gmailIntakePollEnabled() {
 
 function gmailIntakeNotificationEnabled() {
   return clean(process.env.ENABLE_GMAIL_INTAKE_NOTIFICATIONS).toLowerCase() === "true";
+}
+
+function calendarAirtableSyncEnabled() {
+  return clean(process.env.ENABLE_CALENDAR_AIRTABLE_SYNC).toLowerCase() === "true";
+}
+
+function calendarSyncRange(input = {}) {
+  const startDate = clean(input.startDate) || shiftDate(localDate(), -Math.max(0, Math.min(30, Number(process.env.CALENDAR_SYNC_LOOKBACK_DAYS) || 7)));
+  const days = Math.max(1, Math.min(90, Number(input.days) || Number(process.env.CALENDAR_SYNC_LOOKAHEAD_DAYS) || 60));
+  return { startDate, days, start: localDateTime(startDate, "00:00"), end: localDateTime(shiftDate(startDate, days), "00:00") };
+}
+
+function airtableCalendarMatch(fields, records = []) {
+  const jobId = clean(fields["Job ID"]);
+  const eventUid = clean(fields["Calendar Event UID"]);
+  const calendarUrl = clean(fields["Calendar URL"]);
+  const address = normalizeAddress(fields["Property Address"]);
+  const start = clean(fields["Calendar Event Start"]);
+  return records.find((record) => {
+    const existing = record && record.fields || {};
+    if (jobId && clean(existing["Job ID"]) === jobId) return true;
+    if (eventUid && clean(existing["Calendar Event UID"]) === eventUid && (!calendarUrl || clean(existing["Calendar URL"]) === calendarUrl)) return true;
+    if (address && normalizeAddress(existing["Property Address"] || existing.Address) === address) {
+      const existingStart = clean(existing["Calendar Event Start"] || existing["Appointment Start"] || existing["Appointment Date"]);
+      return !start || !existingStart || new Date(existingStart).getTime() === new Date(start).getTime();
+    }
+    return false;
+  }) || null;
+}
+
+function knownAirtablePatch(record, fields) {
+  const existing = record && record.fields ? record.fields : {};
+  return Object.fromEntries(Object.entries(fields).filter(([key, value]) => Object.prototype.hasOwnProperty.call(existing, key) && value !== ""));
+}
+
+async function syncCalendarToAirtable(input = {}) {
+  const range = calendarSyncRange(input);
+  const dryRun = input.dryRun === undefined ? true : Boolean(input.dryRun);
+  if (!dryRun && !calendarAirtableSyncEnabled()) return { ok: false, status: 503, error: "Calendar-to-Airtable sync is disabled" };
+  const discovered = await discoverCalendars({ email: clean(process.env.ICLOUD_EMAIL), password: clean(process.env.ICLOUD_APP_PASSWORD) });
+  const roster = buildRoster(discovered.calendars);
+  const calendars = [...(roster.owner ? [roster.owner] : []), ...roster.workers];
+  const calendarResults = await getCalendarEvents({ email: clean(process.env.ICLOUD_EMAIL), password: clean(process.env.ICLOUD_APP_PASSWORD), calendars, start: range.start, end: range.end });
+  const renderProjects = projectState.listProjects({ limit: 500 });
+  const airtableRecords = await listJobs({ maxRecords: 500 });
+  const results = [];
+  for (const result of calendarResults) {
+    for (const event of result.events || []) {
+      const calendar = result.calendar;
+      const key = calendarEventKey(calendar, event);
+      const project = findProjectMatch(event, calendar, renderProjects);
+      const fields = calendarAirtableFields(calendar, event, project);
+      const existing = airtableCalendarMatch(fields, airtableRecords);
+      const action = existing ? "matched" : "create";
+      let airtableRecordId = existing && existing.id || "";
+      if (project && !dryRun) {
+        projectState.upsertProject({
+          ...project,
+          status: project.status === "closed" ? project.status : "scheduled",
+          stage: project.stage === "closed" ? project.stage : "scheduled",
+          metadata: {
+            ...project.metadata,
+            calendarEvent: {
+              uid: clean(event.uid),
+              calendarName: clean(calendar.name),
+              calendarUrl: clean(calendar.url),
+              start: event.start && event.start.toISOString ? event.start.toISOString() : clean(event.start),
+              end: event.end && event.end.toISOString ? event.end.toISOString() : clean(event.end),
+              summary: clean(event.summary),
+              airtableRecordId
+            }
+          }
+        });
+      }
+      if (!dryRun && existing) {
+        const patch = knownAirtablePatch(existing, fields);
+        if (Object.keys(patch).length) await updateJob(existing.id, patch);
+      } else if (!dryRun && !existing) {
+        const created = await createAirtableIntakeRecord({ fields });
+        airtableRecordId = created.record && created.record.id || "";
+        airtableRecords.push(created.record);
+      }
+      if (!dryRun && project && airtableRecordId) {
+        const current = projectState.getProject(project.id);
+        if (current) projectState.updateProjectProgress(project.id, {
+          metadata: { calendarEvent: { ...(current.metadata && current.metadata.calendarEvent), airtableRecordId } },
+          note: "Calendar event reconciled to Airtable"
+        }, "render");
+      }
+      results.push({
+        key,
+        action,
+        dryRun,
+        calendar: calendar.name,
+        uid: clean(event.uid),
+        summary: clean(event.summary),
+        propertyAddress: extractAddress(event) || fields["Property Address"],
+        start: fields["Calendar Event Start"],
+        airtableRecordId,
+        renderProjectId: project && project.id || ""
+      });
+    }
+  }
+  return { ok: true, readOnly: dryRun, startDate: range.startDate, days: range.days, calendars: calendars.map((calendar) => calendar.name), imported: results.filter((item) => item.action === "create").length, matched: results.filter((item) => item.action === "matched").length, results };
+}
+
+async function pollCalendarAirtableSync() {
+  if (!calendarAirtableSyncEnabled() || calendarSyncPollRunning) return;
+  calendarSyncPollRunning = true;
+  try {
+    const result = await syncCalendarToAirtable({ dryRun: false });
+    console.log(`CALENDAR sync: ${result.imported} created, ${result.matched} matched`);
+  } catch (error) {
+    console.error(`CALENDAR sync failed: ${error.message}`);
+  } finally {
+    calendarSyncPollRunning = false;
+  }
 }
 
 async function deliverGmailIntakeNotification(project, message) {
@@ -1393,6 +1515,23 @@ async function route(req, res) {
     return json(res, 200, { ok: true, readOnly: true, projects: projectState.listProjects({ status: url.searchParams.get("status"), stage: url.searchParams.get("stage"), limit: url.searchParams.get("limit") }) });
   }
 
+  if ((req.method === "GET" || req.method === "POST") && url.pathname === "/api/icloud/calendar-sync") {
+    if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+    try {
+      const body = req.method === "POST" ? await readJsonBody(req) : {};
+      const input = {
+        ...body,
+        startDate: body.startDate || url.searchParams.get("startDate") || "",
+        days: body.days || url.searchParams.get("days") || "",
+        dryRun: req.method === "GET" ? true : body.dryRun === undefined ? true : body.dryRun
+      };
+      return json(res, 200, await syncCalendarToAirtable(input));
+    } catch (error) {
+      console.error(`Calendar sync failed: ${error.message}`);
+      return json(res, 502, { ok: false, error: "Calendar sync failed", detail: error.message });
+    }
+  }
+
   if (req.method === "POST" && url.pathname === "/api/ops/projects") {
     if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
     try {
@@ -1967,6 +2106,10 @@ server.listen(PORT, "0.0.0.0", () => {
   if (appointmentReminderEnabled()) {
     setTimeout(() => pollAppointmentReminders().catch((error) => console.error(`APPOINTMENT REMINDER poll failed: ${error.message}`)), 15000).unref();
     setInterval(() => pollAppointmentReminders().catch((error) => console.error(`APPOINTMENT REMINDER poll failed: ${error.message}`)), Number(process.env.APPOINTMENT_REMINDER_POLL_MS) || 900000).unref();
+  }
+  if (calendarAirtableSyncEnabled()) {
+    setTimeout(() => pollCalendarAirtableSync().catch((error) => console.error(`CALENDAR sync failed: ${error.message}`)), 18000).unref();
+    setInterval(() => pollCalendarAirtableSync().catch((error) => console.error(`CALENDAR sync failed: ${error.message}`)), Number(process.env.CALENDAR_SYNC_POLL_MS) || 1800000).unref();
   }
   if (gmailIntakePollEnabled()) {
     setTimeout(() => pollGmailIntake().catch((error) => console.error(`Gmail intake poll failed: ${error.message}`)), 12000).unref();

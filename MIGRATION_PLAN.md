@@ -39,7 +39,10 @@ disabled as part of the preparatory work.
     confirmation/reminder flags remain disabled until a controlled test is
     reviewed. Gmail intake can optionally send Anna an internal-only quote-style
     review email with a Gmail-thread link after `ENABLE_GMAIL_INTAKE_NOTIFICATIONS`
-    is enabled.
+   is enabled.
+13. A calendar-to-Airtable reconciliation pass is staged in dry-run mode. It
+    imports owner/worker iCloud events, matches Gmail/Render projects by
+    address, and uses stable calendar UID keys to prevent duplicate Jobs.
 
 ## Execution order
 

@@ -174,6 +174,8 @@ function parseIcsEvents(ics) {
     const [name, ...parameters] = property.split(";");
     if (name === "SUMMARY") current.summary = value;
     if (name === "UID") current.uid = value;
+    if (name === "DESCRIPTION") current.description = value;
+    if (name === "LOCATION") current.location = value;
     if (name === "DTSTART") {
       const tzid = parameters.find((parameter) => parameter.toUpperCase().startsWith("TZID="));
       current.start = parseIcsDate(value, tzid ? tzid.slice(5) : "America/Los_Angeles");
@@ -199,6 +201,15 @@ function calendarQueryBody(start, end) {
 async function listCalendarEvents({ calendar, email, password, start, end }) {
   const xml = await davRequest(calendar.url, email, password, calendarQueryBody(start, end), "1", "REPORT");
   return responseBlocks(xml).flatMap((block) => parseIcsEvents(tagRaw(block, "calendar-data")));
+}
+
+async function getCalendarEvents({ email, password, calendars, start, end }) {
+  if (!email || !password) throw new Error("ICLOUD_EMAIL and ICLOUD_APP_PASSWORD are required");
+  const results = await Promise.all((Array.isArray(calendars) ? calendars : []).map(async (calendar) => ({
+    calendar: { name: calendar.name, url: calendar.url },
+    events: await listCalendarEvents({ calendar, email, password, start, end })
+  })));
+  return results;
 }
 
 function localDateString(date) {
@@ -385,7 +396,9 @@ async function discoverCalendars({ email, password }) {
 
 module.exports = {
   discoverCalendars,
+  getCalendarEvents,
   getCalendarAvailability,
+  listCalendarEvents,
   parseIcsEvents,
   createProvisionalHold,
   releaseProvisionalHold,

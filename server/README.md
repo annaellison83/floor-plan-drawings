@@ -221,6 +221,23 @@ primary/fallback SMTP path. `ENABLE_APPOINTMENT_CONFIRMATIONS` and
 enabled, Render checks scheduled projects every `APPOINTMENT_REMINDER_POLL_MS`
 and sends one reminder in the 20–28 hour window before the stored appointment.
 
+## Calendar reconciliation
+
+`GET /api/icloud/calendar-sync` (or `POST` with `{"dryRun":true}`) performs a
+read-only reconciliation of Anna's and the workers' iCloud calendars. It
+excludes Home and Reminders, extracts addresses when present, matches existing
+Render projects and Airtable Jobs, and reports which events would be created
+versus matched. Gmail projects are matched by normalized property address and
+retain their Gmail thread ID in the proposed Airtable listing.
+
+The pass is deliberately dry-run by default. After reviewing one controlled
+result, set `ENABLE_CALENDAR_AIRTABLE_SYNC=true` and run the protected endpoint
+with `{"dryRun":false}`. Render then creates only unmatched Airtable Jobs and
+updates matched records only for fields already present in the table. Every
+import uses a stable iCloud calendar URL + event UID key, so moving an event
+updates the same listing instead of creating a second one. Automatic polling is
+off until that first review; when enabled it runs every `CALENDAR_SYNC_POLL_MS`.
+
 The current project-state store is durable only when `STATE_FILE` points at a
 persistent Render disk. Until that is provisioned, Airtable remains the
 recovery source and the Gmail poller should stay disabled.

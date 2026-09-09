@@ -230,6 +230,24 @@ async function listQuoteReadyCandidates(options = {}) {
   return body.records || [];
 }
 
+async function listJobs(options = {}) {
+  const settings = { ...config(), ...options };
+  if (!settings.token || !settings.baseId) throw new Error("Airtable is not configured");
+  const table = settings.jobsTableId || settings.jobsTable;
+  const records = [];
+  let offset = "";
+  const maxRecords = Math.max(1, Math.min(500, Number(options.maxRecords) || 500));
+  do {
+    const url = new URL(`${AIRTABLE_API}/${encodeURIComponent(settings.baseId)}/${encodeURIComponent(table)}`);
+    url.searchParams.set("pageSize", "100");
+    if (offset) url.searchParams.set("offset", offset);
+    const body = await airtableJson(url.href, { token: settings.token });
+    records.push(...(body.records || []));
+    offset = clean(body.offset);
+  } while (offset && records.length < maxRecords);
+  return records.slice(0, maxRecords);
+}
+
 async function findClientQuoteDeliveries(recordId, options = {}) {
   const settings = { ...config(), ...options };
   const id = clean(recordId);
@@ -414,6 +432,7 @@ module.exports = {
   getApprovalState,
   listApprovedQuoteCandidates,
   listFollowUpCandidates,
+  listJobs,
   listFailedDeliveries,
   listNewRequestCandidates,
   listPropertyReviewCandidates,
