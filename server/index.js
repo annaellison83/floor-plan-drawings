@@ -405,6 +405,28 @@ async function syncGmailMessageToAirtable(message, project, airtableRecords = []
   return { action: "created", recordId: record.id || "", key: fields["Normalized Property Key"], omittedFields: created.omittedFields || [] };
 }
 
+async function backfillGmailProjectsToAirtable(client, airtableRecords, results) {
+  if (!gmailAirtableSyncEnabled()) return;
+  const cap = Math.max(0, Math.min(25, Number(process.env.GMAIL_AIRTABLE_BACKFILL_MAX) || 5));
+  let attempted = 0;
+  for (const project of projectState.listProjects({ limit: 500 })) {
+    if (attempted >= cap || project.source !== "gmail" || !project.propertyAddress) continue;
+    const threadId = clean(project.metadata && project.metadata.gmailThreadId);
+    if (!threadId || findGmailAirtableMatch(airtableRecords, { threadId, propertyAddress: project.propertyAddress })) continue;
+    const messageId = clean(project.metadata && project.metadata.gmailMessageId);
+    if (!messageId) continue;
+    attempted += 1;
+    try {
+      const raw = await client.getMessage(messageId);
+      const parsed = parseGmailMessage(raw, { agentEmails: client.config.agentEmails, clientEmails: client.config.clientEmails });
+      const synced = await syncGmailMessageToAirtable(parsed, project, airtableRecords);
+      results.push({ messageId, threadId, backfill: true, ...synced });
+    } catch (error) {
+      results.push({ messageId, threadId, backfill: true, action: "error", error: error.message });
+    }
+  }
+}
+
 async function syncCalendarToAirtable(input = {}) {
   const range = calendarSyncRange(input);
   const dryRun = input.dryRun === undefined ? true : Boolean(input.dryRun);
@@ -651,6 +673,7 @@ async function pollGmailIntake() {
       console.warn(`Gmail project enrichment failed for ${project.id}: ${error.message}`);
     }
   }
+  await backfillGmailProjectsToAirtable(client, airtableRecords, airtableSync);
   const processed = result.processed.map((message) => ({ id: message.id, threadId: message.threadId, subject: message.subject }));
   if (clean(process.env.GMAIL_PROCESSED_LABEL_ID) && processed.length) {
     for (const message of result.processed) {

@@ -217,6 +217,9 @@ never overwritten. The Jobs table stores Gmail Thread ID, Gmail Message ID,
 Normalized Property Key, and Source Channels so later calendar and email runs
 can merge in either order without duplicates. Messages missing an address stay
 in Render for review and are not written as ambiguous Airtable Jobs.
+When the bridge is first enabled, each poll also backfills up to
+`GMAIL_AIRTABLE_BACKFILL_MAX` previously ingested Gmail projects that are not
+already represented in Airtable (default 5) to avoid Gmail quota spikes.
 
 Set `ENABLE_GMAIL_INTAKE_NOTIFICATIONS=true` only after reviewing one manual
 poll. For each labeled message with an extracted property address, Render then
