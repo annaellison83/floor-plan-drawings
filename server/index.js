@@ -680,6 +680,10 @@ async function pollGmailIntake() {
       await client.modifyLabels(message.id, { addLabelIds: [clean(process.env.GMAIL_PROCESSED_LABEL_ID)] });
     }
   }
+  const airtableCreated = airtableSync.filter((item) => item.action === "created").length;
+  const airtableMatched = airtableSync.filter((item) => item.action === "matched").length;
+  const airtableErrors = airtableSync.filter((item) => item.action === "error").length;
+  console.log(`GMAIL intake: ${processed.length} processed, ${airtableCreated} Airtable created, ${airtableMatched} matched, ${airtableErrors} sync errors`);
   return { ok: true, autoLabel, processed, skipped: result.skipped, airtableSync, nextPageToken: result.nextPageToken };
 }
 
