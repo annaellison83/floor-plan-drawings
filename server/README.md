@@ -195,6 +195,17 @@ to run the same pass every two minutes (or set `GMAIL_INTAKE_POLL_MS`).
 Optionally set `GMAIL_PROCESSED_LABEL_ID` to add a separate processed label;
 the intake label is never removed automatically.
 
+To capture future requests that arrive without Anna manually applying the
+label, set `ENABLE_GMAIL_AUTO_LABEL=true`. Before each intake poll Render runs
+a bounded Gmail search (default: the last three days, excluding spam/trash)
+and reads each candidate. A message is labeled only when it contains both a
+FloorPlanDrawings marker (floor plan, site plan, quote, Matterport, square feet,
+etc.) and an address or explicit FloorPlanDrawings/new-request marker. Obvious
+medical, tax, insurance, Stripe, and other finance messages are rejected. The
+whole matched Gmail thread receives `[FPD] Intake`; message content is never
+changed, sent, archived, or deleted. Override the search with
+`GMAIL_AUTO_LABEL_QUERY` and cap the pass with `GMAIL_AUTO_LABEL_MAX_RESULTS`.
+
 Set `ENABLE_GMAIL_INTAKE_NOTIFICATIONS=true` only after reviewing one manual
 poll. For each labeled message with an extracted property address, Render then
 sends Anna an internal-only `NEW REQUEST` email using the same responsive quote

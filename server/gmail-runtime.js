@@ -9,6 +9,9 @@ function gmailConfig(env = process.env) {
     clientId: clean(env.GMAIL_CLIENT_ID), clientSecret: clean(env.GMAIL_CLIENT_SECRET),
     refreshToken: clean(env.GMAIL_REFRESH_TOKEN), accessToken: clean(env.GMAIL_ACCESS_TOKEN),
     intakeLabelId: clean(env.GMAIL_INTAKE_LABEL_ID), intakeQuery: clean(env.GMAIL_INTAKE_QUERY),
+    autoLabelEnabled: clean(env.ENABLE_GMAIL_AUTO_LABEL).toLowerCase() === "true",
+    autoLabelQuery: clean(env.GMAIL_AUTO_LABEL_QUERY),
+    autoLabelMaxResults: Math.max(1, Math.min(100, Number(env.GMAIL_AUTO_LABEL_MAX_RESULTS) || 50)),
     maxResults: Math.max(1, Math.min(100, Number(env.GMAIL_INTAKE_MAX_RESULTS) || 25)),
     agentEmails: list(env.GMAIL_AGENT_EMAILS), clientEmails: list(env.GMAIL_CLIENT_EMAILS)
   };
@@ -67,6 +70,13 @@ function collectBodies(part, result = { text: [], html: [] }) {
   return result;
 }
 
+function collectAttachmentNames(part, result = []) {
+  if (!part) return result;
+  if (clean(part.filename)) result.push(clean(part.filename));
+  for (const child of part.parts || []) collectAttachmentNames(child, result);
+  return result;
+}
+
 const STREET_SUFFIX = /\b(?:street|st|avenue|ave|boulevard|blvd|drive|dr|road|rd|lane|ln|court|ct|place|pl|way|parkway|pkwy|circle|cir|terrace|ter|highway|hwy)\b/i;
 
 function titleCase(value) {
@@ -118,6 +128,7 @@ function extractClientName(subject, text) {
 function parseGmailMessage(message, options = {}) {
   const headers = headerMap(message && message.payload && message.payload.headers);
   const bodies = collectBodies(message && message.payload);
+  const attachmentNames = [...new Set(collectAttachmentNames(message && message.payload))];
   const from = addressParts(headers.from), to = addressParts(headers.to), cc = addressParts(headers.cc);
   return {
     id: clean(message && message.id), threadId: clean(message && message.threadId), historyId: clean(message && message.historyId),
@@ -127,9 +138,24 @@ function parseGmailMessage(message, options = {}) {
     contacts: classifyContacts({ from, to, cc, agentEmails: options.agentEmails || [], clientEmails: options.clientEmails || [] }),
     propertyAddress: extractPropertyAddress(headers.subject, bodies.text.join("\n\n")),
     clientName: extractClientName(headers.subject, bodies.text.join("\n\n")),
-    text: bodies.text.join("\n\n").trim(), html: bodies.html.join("\n").trim(),
+    text: bodies.text.join("\n\n").trim(), html: bodies.html.join("\n").trim(), attachmentNames,
     labelIds: Array.isArray(message && message.labelIds) ? [...message.labelIds] : [], raw: message
   };
+}
+
+const FPD_INTAKE_MARKERS = /\b(?:floor\s*plans?|floorplans?|site\s*plans?|matterport|3d\s*(?:tour|scan)|sq\.?\s*ft|square\s*feet|quick\s*quote|quote\s*(?:request|ready)|new\s+request|measure(?:ment)?s?|fpd\s+website)\b/i;
+const FPD_NON_INTAKE_MARKERS = /\b(?:kaiser|medical|therapy|soul\s*tenders|stripe|payout|tax|sep\s+contribution|retirement|insurance)\b/i;
+
+function isLikelyFloorPlanIntake(message = {}) {
+  const subject = clean(message.subject);
+  const text = clean(message.text || message.snippet);
+  const attachments = Array.isArray(message.attachmentNames) ? message.attachmentNames.join(" ") : "";
+  const searchable = `${subject}\n${text}\n${attachments}`;
+  if (!searchable || FPD_NON_INTAKE_MARKERS.test(searchable)) return false;
+  const hasMarker = FPD_INTAKE_MARKERS.test(searchable);
+  const hasAddress = Boolean(clean(message.propertyAddress)) || /\b\d{1,6}\s+[A-Za-z0-9][^\n,]{1,80}\b(?:street|st|avenue|ave|boulevard|blvd|drive|dr|road|rd|lane|ln|court|ct|place|pl|way|parkway|pkwy|circle|cir|terrace|ter|highway|hwy)\b/i.test(searchable);
+  const websiteMarker = /floorplandrawings\.com|floor\s*plan\s*drawings/i.test(searchable);
+  return hasMarker && (hasAddress || websiteMarker || /new\s+request|quick\s+quote|site\s+map/i.test(subject));
 }
 
 async function jsonFetch(fetchImpl, url, options = {}) {
@@ -189,4 +215,4 @@ async function processIntakeMessages({ client, onMessage, store = createMemoryId
   return { processed, skipped, nextPageToken: listed.nextPageToken || "" };
 }
 
-module.exports = { addressParts, classifyContacts, createGmailClient, createMemoryIdempotencyStore, extractClientName, extractPropertyAddress, gmailConfig, isGmailConfigured, parseGmailMessage, processIntakeMessages };
+module.exports = { addressParts, classifyContacts, collectAttachmentNames, createGmailClient, createMemoryIdempotencyStore, extractClientName, extractPropertyAddress, gmailConfig, isGmailConfigured, isLikelyFloorPlanIntake, parseGmailMessage, processIntakeMessages };

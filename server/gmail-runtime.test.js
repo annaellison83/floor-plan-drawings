@@ -1,10 +1,11 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { addressParts, classifyContacts, createGmailClient, extractClientName, extractPropertyAddress, gmailConfig, parseGmailMessage, processIntakeMessages } = require("./gmail-runtime");
+const { addressParts, classifyContacts, createGmailClient, extractClientName, extractPropertyAddress, gmailConfig, isLikelyFloorPlanIntake, parseGmailMessage, processIntakeMessages } = require("./gmail-runtime");
 
 test("gmailConfig reads OAuth and intake settings", () => {
-  const config = gmailConfig({ GMAIL_CLIENT_ID: "id", GMAIL_CLIENT_SECRET: "secret", GMAIL_REFRESH_TOKEN: "refresh", GMAIL_INTAKE_LABEL_ID: "Label_29", GMAIL_AGENT_EMAILS: "anna@example.com, worker@example.com" });
+  const config = gmailConfig({ GMAIL_CLIENT_ID: "id", GMAIL_CLIENT_SECRET: "secret", GMAIL_REFRESH_TOKEN: "refresh", GMAIL_INTAKE_LABEL_ID: "Label_29", ENABLE_GMAIL_AUTO_LABEL: "true", GMAIL_AUTO_LABEL_QUERY: "floor plan", GMAIL_AGENT_EMAILS: "anna@example.com, worker@example.com" });
   assert.equal(config.clientId, "id"); assert.equal(config.intakeLabelId, "Label_29");
+  assert.equal(config.autoLabelEnabled, true); assert.equal(config.autoLabelQuery, "floor plan");
   assert.deepEqual(config.agentEmails, ["anna@example.com", "worker@example.com"]);
 });
 
@@ -26,6 +27,17 @@ test("structured intake extraction handles floor plan and site map subjects", ()
 test("parseGmailMessage preserves thread and reply metadata and decodes bodies", () => {
   const parsed = parseGmailMessage({ id: "m1", threadId: "t1", historyId: "h1", internalDate: "10", labelIds: ["Label_29"], payload: { headers: [{ name: "From", value: "Agent <agent@example.com>" }, { name: "To", value: "Anna <anna@example.com>" }, { name: "Subject", value: "Floor plan request" }, { name: "Message-ID", value: "<m1@example.com>" }, { name: "References", value: "<old@example.com>" }], parts: [{ mimeType: "text/plain", body: { data: Buffer.from("Hello").toString("base64url") } }] } }, { agentEmails: ["agent@example.com"] });
   assert.equal(parsed.threadId, "t1"); assert.equal(parsed.messageId, "<m1@example.com>"); assert.equal(parsed.text, "Hello"); assert.equal(parsed.contacts.source.role, "agent");
+});
+
+test("FPD auto-label heuristic requires a marker plus an address and rejects unrelated mail", () => {
+  assert.equal(isLikelyFloorPlanIntake({ subject: "Floor Plan Request", text: "Please measure 4111 Edgehill Drive.", propertyAddress: "4111 Edgehill Drive" }), true);
+  assert.equal(isLikelyFloorPlanIntake({ subject: "Appointment Confirmation", text: "Kaiser appointment at 4111 Edgehill Drive", propertyAddress: "4111 Edgehill Drive" }), false);
+  assert.equal(isLikelyFloorPlanIntake({ subject: "Quick hello", text: "Can you do Tuesday?", propertyAddress: "4111 Edgehill Drive" }), false);
+});
+
+test("parseGmailMessage collects attachment names for intake heuristics", () => {
+  const parsed = parseGmailMessage({ id: "m1", payload: { headers: [], parts: [{ mimeType: "application/pdf", filename: "floorplan.pdf", body: {} }] } });
+  assert.deepEqual(parsed.attachmentNames, ["floorplan.pdf"]);
 });
 
 test("processIntakeMessages passes role configuration to the parser", async () => {

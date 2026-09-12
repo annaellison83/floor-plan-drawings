@@ -14,7 +14,7 @@ const { calendarAirtableFields, calendarEventKey, extractAddress, findProjectMat
 const { proposalPayload, signProposal, verifyProposal } = require("./appointment-proposals");
 const { hasFallbackSmtp, isSmtpConfigured, sendFailureAlert, sendMail, verifySmtp } = require("./mail");
 const { projectState, recipientsFor } = require("./project-state");
-const { createGmailClient, isGmailConfigured, parseGmailMessage, processIntakeMessages } = require("./gmail-runtime");
+const { createGmailClient, isGmailConfigured, isLikelyFloorPlanIntake, parseGmailMessage, processIntakeMessages } = require("./gmail-runtime");
 const {
   clientQuoteEmail,
   clientAvailabilityProposalEmail,
@@ -158,6 +158,7 @@ function integrationStatus() {
     gmailSmtp: Boolean(process.env.SMTP_USER && process.env.SMTP_APP_PASSWORD),
     gmailApiIntake: isGmailConfigured(),
     gmailIntakePollEnabled: gmailIntakePollEnabled(),
+    gmailAutoLabelEnabled: gmailAutoLabelEnabled(),
     renderStateDurable: Boolean(clean(process.env.STATE_FILE)),
     icloud: Boolean(process.env.ICLOUD_EMAIL && process.env.ICLOUD_APP_PASSWORD),
     googleMaps: Boolean(process.env.GOOGLE_MAPS_STATIC_KEY || process.env.GOOGLE_MAPS_SERVER_KEY),
@@ -250,6 +251,10 @@ function gmailIntakePollEnabled() {
   return clean(process.env.ENABLE_GMAIL_INTAKE_POLL).toLowerCase() === "true";
 }
 
+function gmailAutoLabelEnabled() {
+  return clean(process.env.ENABLE_GMAIL_AUTO_LABEL).toLowerCase() === "true";
+}
+
 function gmailIntakeNotificationEnabled() {
   return clean(process.env.ENABLE_GMAIL_INTAKE_NOTIFICATIONS).toLowerCase() === "true";
 }
@@ -332,6 +337,36 @@ async function applyGmailIntakeLabel(client, match) {
   if (!ids.length) return { ok: false, reason: "Gmail thread contains no labelable messages" };
   for (const id of ids.slice(0, 100)) await client.modifyLabels(id, { addLabelIds: [labelId] });
   return { ok: true, threadId, messageCount: Math.min(ids.length, 100), labelId };
+}
+
+const DEFAULT_GMAIL_AUTO_LABEL_QUERY = 'newer_than:3d -in:spam -in:trash -label:"[FPD] Intake" {floorplan "floor plan" "site plan" "sq ft" "square feet" matterport "new request" "quick quote" measure listing}';
+
+async function autoLabelGmailIntake(client) {
+  const config = client && client.config;
+  if (!gmailAutoLabelEnabled()) return { enabled: false, labeled: [], skipped: [], errors: [] };
+  if (!client || !config || !config.intakeLabelId) return { enabled: true, labeled: [], skipped: [], errors: ["Gmail intake label is not configured"] };
+  const query = config.autoLabelQuery || DEFAULT_GMAIL_AUTO_LABEL_QUERY;
+  const listed = await client.listMessages({ labelId: "", query, maxResults: config.autoLabelMaxResults || 50 });
+  const seenThreads = new Set();
+  const labeled = [], skipped = [], errors = [];
+  for (const item of listed.messages || []) {
+    const id = clean(item && item.id);
+    if (!id) continue;
+    try {
+      const raw = await client.getMessage(id);
+      const parsed = parseGmailMessage(raw, { agentEmails: config.agentEmails, clientEmails: config.clientEmails });
+      if (!isLikelyFloorPlanIntake(parsed)) { skipped.push({ id, reason: "Heuristic did not meet address + FPD marker threshold" }); continue; }
+      const threadId = clean(parsed.threadId || item.threadId);
+      if (!threadId || seenThreads.has(threadId)) continue;
+      seenThreads.add(threadId);
+      const result = await applyGmailIntakeLabel(client, { id, threadId });
+      if (result.ok) labeled.push({ threadId, messageCount: result.messageCount, subject: parsed.subject, propertyAddress: parsed.propertyAddress });
+      else errors.push({ id, threadId, error: result.reason });
+    } catch (error) {
+      errors.push({ id, error: error.message });
+    }
+  }
+  return { enabled: true, query, labeled, skipped, errors, nextPageToken: listed.nextPageToken || "" };
 }
 
 async function syncCalendarToAirtable(input = {}) {
@@ -532,6 +567,7 @@ async function pollGmailIntake() {
     has: async (key) => projectState.hasProcessedMessage(key),
     mark: async (key) => projectState.markProcessedMessage(key)
   };
+  const autoLabel = await autoLabelGmailIntake(client);
   const result = await processIntakeMessages({
     client,
     store,
@@ -576,7 +612,7 @@ async function pollGmailIntake() {
       await client.modifyLabels(message.id, { addLabelIds: [clean(process.env.GMAIL_PROCESSED_LABEL_ID)] });
     }
   }
-  return { ok: true, processed, skipped: result.skipped, nextPageToken: result.nextPageToken };
+  return { ok: true, autoLabel, processed, skipped: result.skipped, nextPageToken: result.nextPageToken };
 }
 
 function holdId({ jobKey, worker, start }) {
