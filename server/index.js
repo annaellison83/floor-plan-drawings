@@ -359,7 +359,10 @@ async function syncCalendarToAirtable(input = {}) {
       }
       const key = calendarEventKey(calendar, event);
       const project = findProjectMatch(event, calendar, renderProjects);
-      const gmailMatch = project ? null : await findGmailThreadMatch(event, gmailClient, gmailCache, gmailLookupErrors);
+      const projectThreadId = project && project.metadata && clean(project.metadata.gmailThreadId);
+      const gmailMatch = projectThreadId
+        ? { threadId: projectThreadId, id: project.metadata.gmailMessageId || "" }
+        : await findGmailThreadMatch(event, gmailClient, gmailCache, gmailLookupErrors);
       const fields = calendarAirtableFields(calendar, event, project, gmailMatch);
       let gmailLabelApplied = false;
       if (!dryRun && calendarGmailLabelSyncEnabled() && gmailMatch) {
