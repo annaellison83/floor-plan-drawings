@@ -206,6 +206,18 @@ whole matched Gmail thread receives `[FPD] Intake`; message content is never
 changed, sent, archived, or deleted. Override the search with
 `GMAIL_AUTO_LABEL_QUERY` and cap the pass with `GMAIL_AUTO_LABEL_MAX_RESULTS`.
 
+To converge Gmail, website, and calendar sources into Airtable, set
+`ENABLE_GMAIL_AIRTABLE_SYNC=true` after the Airtable token/base are configured.
+Each labeled Gmail message with both a thread ID and extracted property address
+uses an idempotent key of `thread ID + normalized property address`. Render
+updates the existing Jobs record when that key (or a unique normalized address
+from a calendar/website intake) already exists; otherwise it creates one
+`New Request` Job. Existing status, quote, assignment, and scheduling fields are
+never overwritten. The Jobs table stores Gmail Thread ID, Gmail Message ID,
+Normalized Property Key, and Source Channels so later calendar and email runs
+can merge in either order without duplicates. Messages missing an address stay
+in Render for review and are not written as ambiguous Airtable Jobs.
+
 Set `ENABLE_GMAIL_INTAKE_NOTIFICATIONS=true` only after reviewing one manual
 poll. For each labeled message with an extracted property address, Render then
 sends Anna an internal-only `NEW REQUEST` email using the same responsive quote

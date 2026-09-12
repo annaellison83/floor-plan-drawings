@@ -91,6 +91,8 @@ function calendarAirtableFields(calendar, event, project = null, gmailMatch = nu
     "Calendar Event Location": clean(event.location),
     "Calendar Sync Source": "iCloud",
     "Gmail Thread ID": project && project.metadata && project.metadata.gmailThreadId || gmailMatch && gmailMatch.threadId || "",
+    "Normalized Property Key": normalizeAddress(address),
+    "Source Channels": "calendar",
     "Calendar Sync Key": calendarEventKey(calendar, event)
   };
 }

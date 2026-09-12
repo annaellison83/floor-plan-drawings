@@ -15,6 +15,7 @@ const { proposalPayload, signProposal, verifyProposal } = require("./appointment
 const { hasFallbackSmtp, isSmtpConfigured, sendFailureAlert, sendMail, verifySmtp } = require("./mail");
 const { projectState, recipientsFor } = require("./project-state");
 const { createGmailClient, isGmailConfigured, isLikelyFloorPlanIntake, parseGmailMessage, processIntakeMessages } = require("./gmail-runtime");
+const { findGmailAirtableMatch, gmailAirtableFields, patchMissingGmailFields } = require("./gmail-airtable-sync");
 const {
   clientQuoteEmail,
   clientAvailabilityProposalEmail,
@@ -158,6 +159,7 @@ function integrationStatus() {
     gmailSmtp: Boolean(process.env.SMTP_USER && process.env.SMTP_APP_PASSWORD),
     gmailApiIntake: isGmailConfigured(),
     gmailIntakePollEnabled: gmailIntakePollEnabled(),
+    gmailAirtableSyncEnabled: gmailAirtableSyncEnabled(),
     gmailAutoLabelEnabled: gmailAutoLabelEnabled(),
     renderStateDurable: Boolean(clean(process.env.STATE_FILE)),
     icloud: Boolean(process.env.ICLOUD_EMAIL && process.env.ICLOUD_APP_PASSWORD),
@@ -255,6 +257,10 @@ function gmailAutoLabelEnabled() {
   return clean(process.env.ENABLE_GMAIL_AUTO_LABEL).toLowerCase() === "true";
 }
 
+function gmailAirtableSyncEnabled() {
+  return clean(process.env.ENABLE_GMAIL_AIRTABLE_SYNC).toLowerCase() === "true";
+}
+
 function gmailIntakeNotificationEnabled() {
   return clean(process.env.ENABLE_GMAIL_INTAKE_NOTIFICATIONS).toLowerCase() === "true";
 }
@@ -293,7 +299,11 @@ function airtableCalendarMatch(fields, records = []) {
 
 function knownAirtablePatch(record, fields) {
   const existing = record && record.fields ? record.fields : {};
-  return Object.fromEntries(Object.entries(fields).filter(([key, value]) => Object.prototype.hasOwnProperty.call(existing, key) && value !== ""));
+  return Object.fromEntries(Object.entries(fields)
+    .filter(([key, value]) => Object.prototype.hasOwnProperty.call(existing, key) && value !== "")
+    .map(([key, value]) => [key, key === "Source Channels"
+      ? [...new Set(`${clean(existing[key])},${clean(value)}`.split(",").map(clean).filter(Boolean))].join(", ")
+      : value]));
 }
 
 async function findGmailThreadMatch(event, client, cache, errors = []) {
@@ -367,6 +377,32 @@ async function autoLabelGmailIntake(client) {
     }
   }
   return { enabled: true, query, labeled, skipped, errors, nextPageToken: listed.nextPageToken || "" };
+}
+
+async function syncGmailMessageToAirtable(message, project, airtableRecords = []) {
+  if (!gmailAirtableSyncEnabled()) return { action: "skipped", reason: "disabled" };
+  if (!process.env.AIRTABLE_TOKEN || !process.env.AIRTABLE_BASE_ID) {
+    throw new Error("Gmail-to-Airtable sync is enabled but Airtable is not configured");
+  }
+  const address = clean(message && message.propertyAddress || project && project.propertyAddress);
+  const threadId = clean(message && message.threadId || project && project.metadata && project.metadata.gmailThreadId);
+  if (!address || !threadId) return { action: "skipped", reason: !address ? "property address is missing" : "Gmail thread ID is missing" };
+  const existing = findGmailAirtableMatch(airtableRecords, { threadId, propertyAddress: address });
+  const fields = gmailAirtableFields(message, project, existing);
+  if (existing) {
+    const patch = patchMissingGmailFields(existing, fields);
+    if (Object.keys(patch).length) await updateJob(existing.id, patch);
+    return { action: "matched", recordId: existing.id, patchFields: Object.keys(patch), key: fields["Normalized Property Key"] };
+  }
+  const created = await createAirtableIntakeRecord({ fields });
+  const record = created.record || {};
+  if (record && record.id) airtableRecords.push(record);
+  if (created.duplicate && record.id) {
+    const patch = patchMissingGmailFields(record, fields);
+    if (Object.keys(patch).length) await updateJob(record.id, patch);
+    return { action: "matched", duplicate: true, recordId: record.id, patchFields: Object.keys(patch), key: fields["Normalized Property Key"] };
+  }
+  return { action: "created", recordId: record.id || "", key: fields["Normalized Property Key"], omittedFields: created.omittedFields || [] };
 }
 
 async function syncCalendarToAirtable(input = {}) {
@@ -563,6 +599,8 @@ async function ingestGmailMessage(message) {
 async function pollGmailIntake() {
   if (!isGmailConfigured()) return { ok: false, skipped: true, reason: "Gmail OAuth or intake label is not configured" };
   const client = createGmailClient();
+  const airtableRecords = gmailAirtableSyncEnabled() ? await listJobs({ maxRecords: 500 }) : [];
+  const airtableSync = [];
   const store = {
     has: async (key) => projectState.hasProcessedMessage(key),
     mark: async (key) => projectState.markProcessedMessage(key)
@@ -571,7 +609,14 @@ async function pollGmailIntake() {
   const result = await processIntakeMessages({
     client,
     store,
-    onMessage: ingestGmailMessage,
+    onMessage: async (message) => {
+      const project = await ingestGmailMessage(message);
+      if (gmailAirtableSyncEnabled()) {
+        const synced = await syncGmailMessageToAirtable(message, project, airtableRecords);
+        airtableSync.push({ messageId: message.id, threadId: message.threadId, ...synced });
+      }
+      return project;
+    },
     options: { agentEmails: client.config.agentEmails, clientEmails: client.config.clientEmails }
   });
   // Re-enrich previously ingested Gmail projects after parser/config changes.
@@ -612,7 +657,7 @@ async function pollGmailIntake() {
       await client.modifyLabels(message.id, { addLabelIds: [clean(process.env.GMAIL_PROCESSED_LABEL_ID)] });
     }
   }
-  return { ok: true, autoLabel, processed, skipped: result.skipped, nextPageToken: result.nextPageToken };
+  return { ok: true, autoLabel, processed, skipped: result.skipped, airtableSync, nextPageToken: result.nextPageToken };
 }
 
 function holdId({ jobKey, worker, start }) {
