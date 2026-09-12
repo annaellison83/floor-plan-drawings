@@ -241,6 +241,12 @@ import uses a stable iCloud calendar URL + event UID key, so moving an event
 updates the same listing instead of creating a second one. Automatic polling is
 off until that first review; when enabled it runs every `CALENDAR_SYNC_POLL_MS`.
 
+To have a live calendar reconciliation also apply the configured `[FPD] Intake`
+label to matched Gmail threads, set `ENABLE_CALENDAR_GMAIL_LABEL_SYNC=true`.
+This is independent and guarded: it only runs during a non-dry-run calendar
+sync, labels every message in the matched thread (up to 100), and never sends,
+archives, or edits message content. Leave it false while reviewing the dry run.
+
 The current project-state store is durable only when `STATE_FILE` points at a
 persistent Render disk. Until that is provisioned, Airtable remains the
 recovery source and the Gmail poller should stay disabled.

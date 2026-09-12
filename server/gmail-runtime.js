@@ -167,6 +167,7 @@ function createGmailClient({ env = process.env, fetchImpl = fetch } = {}) {
       return api(`/messages?${params}`);
     },
     async getMessage(id) { if (!clean(id)) throw new Error("A Gmail message ID is required"); return api(`/messages/${encodeURIComponent(id)}?format=full`); },
+    async getThread(id) { if (!clean(id)) throw new Error("A Gmail thread ID is required"); return api(`/threads/${encodeURIComponent(id)}?format=full`); },
     async modifyLabels(id, { addLabelIds = [], removeLabelIds = [] } = {}) {
       return api(`/messages/${encodeURIComponent(id)}/modify`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addLabelIds, removeLabelIds }) });
     }

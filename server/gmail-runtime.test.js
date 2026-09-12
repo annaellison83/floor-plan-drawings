@@ -42,6 +42,15 @@ test("Gmail client refreshes OAuth and scopes intake listing to configured label
   await client.listMessages(); assert.match(calls[1].url, /labelIds=Label_29/); assert.equal(calls[1].options.headers.Authorization, "Bearer access");
 });
 
+test("Gmail client can read a complete thread for label reconciliation", async () => {
+  const calls = [];
+  const fakeFetch = async (url, options) => { calls.push({ url, options }); return { ok: true, json: async () => ({ messages: [{ id: "m1" }, { id: "m2" }] }) }; };
+  const client = createGmailClient({ fetchImpl: fakeFetch, env: { GMAIL_ACCESS_TOKEN: "access", GMAIL_INTAKE_LABEL_ID: "Label_29" } });
+  const thread = await client.getThread("t1");
+  assert.deepEqual(thread.messages.map((item) => item.id), ["m1", "m2"]);
+  assert.match(calls[0].url, /threads\/t1\?format=full/);
+});
+
 test("processIntakeMessages is idempotent and marks only after hook succeeds", async () => {
   const calls = [], client = { listMessages: async () => ({ messages: [{ id: "m1" }, { id: "m2" }, { id: "m1" }] }), getMessage: async (id) => ({ id, threadId: `t-${id}`, payload: { headers: [], body: {} } }) };
   const store = { seen: new Set(["gmail:m2"]), has: async (key) => store.seen.has(key), mark: async (key) => store.seen.add(key) };

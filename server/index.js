@@ -184,7 +184,8 @@ function integrationStatus() {
     appointmentConfirmationEnabled: appointmentConfirmationEnabled(),
     appointmentReminderEnabled: appointmentReminderEnabled(),
     gmailIntakeNotificationEnabled: gmailIntakeNotificationEnabled(),
-    calendarAirtableSyncEnabled: calendarAirtableSyncEnabled()
+    calendarAirtableSyncEnabled: calendarAirtableSyncEnabled(),
+    calendarGmailLabelSyncEnabled: calendarGmailLabelSyncEnabled()
   };
 }
 
@@ -257,6 +258,10 @@ function calendarAirtableSyncEnabled() {
   return clean(process.env.ENABLE_CALENDAR_AIRTABLE_SYNC).toLowerCase() === "true";
 }
 
+function calendarGmailLabelSyncEnabled() {
+  return clean(process.env.ENABLE_CALENDAR_GMAIL_LABEL_SYNC).toLowerCase() === "true";
+}
+
 function calendarSyncRange(input = {}) {
   const startDate = clean(input.startDate) || shiftDate(localDate(), -Math.max(0, Math.min(30, Number(process.env.CALENDAR_SYNC_LOOKBACK_DAYS) || 7)));
   const days = Math.max(1, Math.min(90, Number(input.days) || Number(process.env.CALENDAR_SYNC_LOOKAHEAD_DAYS) || 60));
@@ -317,6 +322,18 @@ async function findGmailThreadMatch(event, client, cache, errors = []) {
   return match;
 }
 
+async function applyGmailIntakeLabel(client, match) {
+  const labelId = client && client.config && clean(client.config.intakeLabelId);
+  const threadId = match && clean(match.threadId);
+  if (!client || !labelId || !threadId) return { ok: false, reason: "Gmail label or thread is unavailable" };
+  const thread = typeof client.getThread === "function" ? await client.getThread(threadId) : null;
+  const ids = [...new Set((thread && thread.messages || []).map((message) => clean(message && message.id)).filter(Boolean))];
+  if (match.id && !ids.includes(match.id)) ids.unshift(match.id);
+  if (!ids.length) return { ok: false, reason: "Gmail thread contains no labelable messages" };
+  for (const id of ids.slice(0, 100)) await client.modifyLabels(id, { addLabelIds: [labelId] });
+  return { ok: true, threadId, messageCount: Math.min(ids.length, 100), labelId };
+}
+
 async function syncCalendarToAirtable(input = {}) {
   const range = calendarSyncRange(input);
   const dryRun = input.dryRun === undefined ? true : Boolean(input.dryRun);
@@ -330,6 +347,7 @@ async function syncCalendarToAirtable(input = {}) {
   const gmailClient = isGmailConfigured() ? createGmailClient() : null;
   const gmailCache = new Map();
   const gmailLookupErrors = [];
+  const gmailLabelErrors = [];
   const results = [];
   const skipped = [];
   for (const result of calendarResults) {
@@ -343,6 +361,16 @@ async function syncCalendarToAirtable(input = {}) {
       const project = findProjectMatch(event, calendar, renderProjects);
       const gmailMatch = project ? null : await findGmailThreadMatch(event, gmailClient, gmailCache, gmailLookupErrors);
       const fields = calendarAirtableFields(calendar, event, project, gmailMatch);
+      let gmailLabelApplied = false;
+      if (!dryRun && calendarGmailLabelSyncEnabled() && gmailMatch) {
+        try {
+          const labelResult = await applyGmailIntakeLabel(gmailClient, gmailMatch);
+          gmailLabelApplied = Boolean(labelResult.ok);
+          if (!labelResult.ok) gmailLabelErrors.push({ threadId: gmailMatch.threadId, error: labelResult.reason });
+        } catch (error) {
+          gmailLabelErrors.push({ threadId: gmailMatch.threadId, error: error.message });
+        }
+      }
       const existing = airtableCalendarMatch(fields, airtableRecords);
       const action = existing ? "matched" : "create";
       let airtableRecordId = existing && existing.id || "";
@@ -392,11 +420,12 @@ async function syncCalendarToAirtable(input = {}) {
         airtableRecordId,
         renderProjectId: project && project.id || "",
         gmailThreadId: fields["Gmail Thread ID"],
-        gmailMatched: Boolean(gmailMatch)
+        gmailMatched: Boolean(gmailMatch),
+        gmailLabelApplied
       });
     }
   }
-  return { ok: true, readOnly: dryRun, startDate: range.startDate, days: range.days, calendars: calendars.map((calendar) => calendar.name), imported: results.filter((item) => item.action === "create").length, matched: results.filter((item) => item.action === "matched").length, gmailMatched: results.filter((item) => item.gmailMatched).length, gmailLookupErrors, skipped: skipped.length, skippedEvents: skipped, results };
+  return { ok: true, readOnly: dryRun, startDate: range.startDate, days: range.days, calendars: calendars.map((calendar) => calendar.name), imported: results.filter((item) => item.action === "create").length, matched: results.filter((item) => item.action === "matched").length, gmailMatched: results.filter((item) => item.gmailMatched).length, gmailLabelsApplied: results.filter((item) => item.gmailLabelApplied).length, gmailLookupErrors, gmailLabelErrors, skipped: skipped.length, skippedEvents: skipped, results };
 }
 
 async function pollCalendarAirtableSync() {
