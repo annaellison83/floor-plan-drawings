@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { clientQuoteLogFields, communicationKey, mapJob, quoteReadyLogFields } = require("./airtable");
+const { clientQuoteLogFields, communicationKey, inboundCommunicationLogFields, mapJob, quoteReadyLogFields } = require("./airtable");
 
 test("maps a Jobs record without exposing credentials", () => {
   const job = mapJob({
@@ -72,4 +72,17 @@ test("builds a deterministic idempotency key and communication log payload", () 
     "Delivery Status": "Sent",
     Summary: "Delivered by Render"
   });
+});
+
+test("builds an incoming Gmail communication log payload", () => {
+  const fields = inboundCommunicationLogFields({
+    recordId: "rec08dRgUXUMPajMt",
+    subject: "Re: Floor plan request",
+    communication: "rec08dRgUXUMPajMt:gmail_received:msg-1",
+    summary: "Inbound Gmail message received."
+  });
+  assert.equal(fields.Direction, "Incoming");
+  assert.equal(fields.Channel, "Email");
+  assert.equal(fields["Event Type"], "Gmail Received");
+  assert.equal(fields.Communication, "rec08dRgUXUMPajMt:gmail_received:msg-1");
 });

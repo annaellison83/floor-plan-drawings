@@ -28,6 +28,7 @@ const {
 } = require("./email-templates");
 const {
   createClientQuoteLog,
+  createInboundCommunicationLog,
   createAppointmentProposalLog,
   createNotificationLog,
   createQuoteReadyLog,
@@ -420,7 +421,17 @@ async function backfillGmailProjectsToAirtable(client, airtableRecords, results)
       const raw = await client.getMessage(messageId);
       const parsed = parseGmailMessage(raw, { agentEmails: client.config.agentEmails, clientEmails: client.config.clientEmails });
       const synced = await syncGmailMessageToAirtable(parsed, project, airtableRecords);
-      results.push({ messageId, threadId, backfill: true, ...synced });
+      let communicationLogged = false;
+      if (synced.recordId) {
+        await createInboundCommunicationLog({
+          recordId: synced.recordId,
+          subject: parsed.subject,
+          communication: communicationKey(synced.recordId, "gmail_received", messageId),
+          summary: `Inbound Gmail message received from ${(parsed.contacts && parsed.contacts.source && parsed.contacts.source.email) || "an unclassified contact"}.`
+        });
+        communicationLogged = true;
+      }
+      results.push({ messageId, threadId, backfill: true, communicationLogged, ...synced });
     } catch (error) {
       results.push({ messageId, threadId, backfill: true, action: "error", error: error.message });
     }
@@ -635,7 +646,16 @@ async function pollGmailIntake() {
       const project = await ingestGmailMessage(message);
       if (gmailAirtableSyncEnabled()) {
         const synced = await syncGmailMessageToAirtable(message, project, airtableRecords);
-        airtableSync.push({ messageId: message.id, threadId: message.threadId, ...synced });
+        let communication = null;
+        if (synced.recordId) {
+          communication = await createInboundCommunicationLog({
+            recordId: synced.recordId,
+            subject: message.subject,
+            communication: communicationKey(synced.recordId, "gmail_received", message.id),
+            summary: `Inbound Gmail message received from ${(message.contacts && message.contacts.source && message.contacts.source.email) || "an unclassified contact"}.`
+          });
+        }
+        airtableSync.push({ messageId: message.id, threadId: message.threadId, communicationLogged: Boolean(communication), ...synced });
       }
       return project;
     },

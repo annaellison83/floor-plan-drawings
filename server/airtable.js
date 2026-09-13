@@ -140,6 +140,19 @@ function notificationLogFields({ recordId, eventType, subject, status = "Pending
   };
 }
 
+function inboundCommunicationLogFields({ recordId, subject, status = "Received", summary = "", communication }) {
+  return {
+    Communication: clean(communication) || communicationKey(recordId, "gmail_received"),
+    "Job Record ID": clean(recordId),
+    Direction: "Incoming",
+    Channel: "Email",
+    "Event Type": "Gmail Received",
+    "Email Subject": clean(subject),
+    "Delivery Status": status,
+    Summary: clean(summary)
+  };
+}
+
 function appointmentProposalLogFields({ recordId, subject, status = "Pending", summary = "", communication }) {
   return notificationLogFields({
     recordId,
@@ -367,6 +380,20 @@ async function createNotificationLog(input, options = {}) {
   });
 }
 
+async function createInboundCommunicationLog(input, options = {}) {
+  const settings = { ...config(), ...options };
+  if (!settings.token || !settings.baseId) throw new Error("Airtable is not configured");
+  const fields = inboundCommunicationLogFields(input);
+  const formula = `{Communication}='${clean(fields.Communication).replaceAll("'", "\\'")}'`;
+  const lookupUrl = new URL(`${AIRTABLE_API}/${encodeURIComponent(settings.baseId)}/${encodeURIComponent(settings.communicationLogTable)}`);
+  lookupUrl.searchParams.set("filterByFormula", formula);
+  lookupUrl.searchParams.set("maxRecords", "1");
+  const existing = await airtableJson(lookupUrl.href, { token: settings.token });
+  if (existing.records && existing.records.length) return { records: existing.records, duplicate: true };
+  const url = `${AIRTABLE_API}/${encodeURIComponent(settings.baseId)}/${encodeURIComponent(settings.communicationLogTable)}`;
+  return { ...(await airtableJson(url, { token: settings.token, method: "POST", body: { records: [{ fields }], typecast: false } })), duplicate: false };
+}
+
 async function createAppointmentProposalLog(input, options = {}) {
   const settings = { ...config(), ...options };
   if (!settings.token || !settings.baseId) throw new Error("Airtable is not configured");
@@ -427,6 +454,7 @@ module.exports = {
   createAppointmentProposalLog,
   createQuoteReadyLog,
   createNotificationLog,
+  createInboundCommunicationLog,
   findClientQuoteDeliveries,
   findAppointmentProposalDeliveries,
   findQuoteReadyDeliveries,
@@ -442,6 +470,7 @@ module.exports = {
   listQuoteReadyCandidates,
   mapJob,
   notificationLogFields,
+  inboundCommunicationLogFields,
   quoteReadyLogFields,
   updateCommunicationLog,
   updateJob
