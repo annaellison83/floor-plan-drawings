@@ -24,6 +24,10 @@ test("structured intake extraction handles floor plan and site map subjects", ()
   assert.equal(extractPropertyAddress("317-321 Ocean Park Blvd & 2528 4th St - Site Map Requested", ""), "317-321 Ocean Park Blvd & 2528 4th St");
 });
 
+test("structured intake extraction removes inline map links from an address", () => {
+  assert.equal(extractPropertyAddress("", "150 El Camino Drive, Suite 300, Beverly Hills, CA 90212<https://www.google.com/maps/search/150+El+Camino>"), "150 El Camino Drive, Suite 300, Beverly Hills, CA 90212");
+});
+
 test("parseGmailMessage preserves thread and reply metadata and decodes bodies", () => {
   const parsed = parseGmailMessage({ id: "m1", threadId: "t1", historyId: "h1", internalDate: "10", labelIds: ["Label_29"], payload: { headers: [{ name: "From", value: "Agent <agent@example.com>" }, { name: "To", value: "Anna <anna@example.com>" }, { name: "Subject", value: "Floor plan request" }, { name: "Message-ID", value: "<m1@example.com>" }, { name: "References", value: "<old@example.com>" }], parts: [{ mimeType: "text/plain", body: { data: Buffer.from("Hello").toString("base64url") } }] } }, { agentEmails: ["agent@example.com"] });
   assert.equal(parsed.threadId, "t1"); assert.equal(parsed.messageId, "<m1@example.com>"); assert.equal(parsed.text, "Hello"); assert.equal(parsed.contacts.source.role, "agent");

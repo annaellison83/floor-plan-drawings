@@ -106,7 +106,9 @@ function extractPropertyAddress(subject, text) {
   if (pipeParts.length >= 3 && looksLikeAddress(pipeParts[1])) return pipeParts[1];
   const dashAddress = headline.match(/^(.+?)\s+-\s+(?:site map|floor plan|property)\s+requested\b/i);
   if (dashAddress && clean(dashAddress[1])) return clean(dashAddress[1]);
-  const lines = clean(text).split(/\r?\n/).map(clean).filter(Boolean);
+  const lines = clean(text).split(/\r?\n/)
+    .map((line) => clean(line).replace(/<https?:\/\/[^>]+>/gi, "").replace(/https?:\/\/\S+/gi, "").trim())
+    .filter(Boolean);
   for (let index = 0; index < lines.length; index += 1) {
     if (/^https?:\/\//i.test(lines[index]) || /^<https?:\/\//i.test(lines[index])) {
       const previous = lines[index - 1] || "";
