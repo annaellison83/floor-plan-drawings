@@ -204,7 +204,8 @@ etc.) and an address or explicit FloorPlanDrawings/new-request marker. Obvious
 medical, tax, insurance, Stripe, and other finance messages are rejected. The
 whole matched Gmail thread receives `[FPD] Intake`; message content is never
 changed, sent, archived, or deleted. Override the search with
-`GMAIL_AUTO_LABEL_QUERY` and cap the pass with `GMAIL_AUTO_LABEL_MAX_RESULTS`.
+`GMAIL_AUTO_LABEL_QUERY` and cap the pass with `GMAIL_AUTO_LABEL_MAX_RESULTS`
+(default 10).
 
 To converge Gmail, website, and calendar sources into Airtable, set
 `ENABLE_GMAIL_AIRTABLE_SYNC=true` after the Airtable token/base are configured.

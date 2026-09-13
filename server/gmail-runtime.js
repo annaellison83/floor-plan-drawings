@@ -11,7 +11,7 @@ function gmailConfig(env = process.env) {
     intakeLabelId: clean(env.GMAIL_INTAKE_LABEL_ID), intakeQuery: clean(env.GMAIL_INTAKE_QUERY),
     autoLabelEnabled: clean(env.ENABLE_GMAIL_AUTO_LABEL).toLowerCase() === "true",
     autoLabelQuery: clean(env.GMAIL_AUTO_LABEL_QUERY),
-    autoLabelMaxResults: Math.max(1, Math.min(100, Number(env.GMAIL_AUTO_LABEL_MAX_RESULTS) || 50)),
+    autoLabelMaxResults: Math.max(1, Math.min(100, Number(env.GMAIL_AUTO_LABEL_MAX_RESULTS) || 10)),
     maxResults: Math.max(1, Math.min(100, Number(env.GMAIL_INTAKE_MAX_RESULTS) || 25)),
     agentEmails: list(env.GMAIL_AGENT_EMAILS), clientEmails: list(env.GMAIL_CLIENT_EMAILS)
   };
