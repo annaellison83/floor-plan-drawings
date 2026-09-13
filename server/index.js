@@ -24,7 +24,8 @@ const {
   followUpEmail,
   newRequestEmail,
   propertyReviewEmail,
-  quoteReadyEmail
+  quoteReadyEmail,
+  roleClarificationEmail
 } = require("./email-templates");
 const {
   createClientQuoteLog,
@@ -161,6 +162,7 @@ function integrationStatus() {
     gmailApiIntake: isGmailConfigured(),
     gmailIntakePollEnabled: gmailIntakePollEnabled(),
     gmailAirtableSyncEnabled: gmailAirtableSyncEnabled(),
+    gmailRoleClarificationEnabled: gmailRoleClarificationEnabled(),
     gmailAutoLabelEnabled: gmailAutoLabelEnabled(),
     renderStateDurable: Boolean(clean(process.env.STATE_FILE)),
     icloud: Boolean(process.env.ICLOUD_EMAIL && process.env.ICLOUD_APP_PASSWORD),
@@ -260,6 +262,11 @@ function gmailAutoLabelEnabled() {
 
 function gmailAirtableSyncEnabled() {
   return clean(process.env.ENABLE_GMAIL_AIRTABLE_SYNC).toLowerCase() === "true";
+}
+
+function gmailRoleClarificationEnabled() {
+  const configured = clean(process.env.ENABLE_GMAIL_ROLE_CLARIFICATION).toLowerCase();
+  return configured ? configured === "true" : gmailAirtableSyncEnabled();
 }
 
 function gmailIntakeNotificationEnabled() {
@@ -590,6 +597,47 @@ async function deliverGmailIntakeNotification(project, message) {
   }
 }
 
+async function deliverGmailRoleClarification(project, message, recordId) {
+  if (!gmailRoleClarificationEnabled() || !recordId) return { ok: false, skipped: true, reason: "role clarification is disabled or Airtable record is unavailable" };
+  const internalTo = [clean(process.env.SMTP_USER)];
+  if (!internalTo[0]) throw new Error("SMTP_USER is not configured");
+  const contacts = [
+    ...((message.contacts && message.contacts.unknown) || []),
+    ...((message.contacts && message.contacts.client) || []),
+    ...((message.contacts && message.contacts.agent) || [])
+  ];
+  const email = roleClarificationEmail({
+    propertyAddress: project.propertyAddress,
+    contacts,
+    recordUrl: `https://airtable.com/${encodeURIComponent(process.env.AIRTABLE_BASE_ID || "")}/${encodeURIComponent(process.env.AIRTABLE_JOBS_TABLE_ID || process.env.AIRTABLE_JOBS_TABLE || "Jobs")}/${encodeURIComponent(recordId)}`
+  });
+  const eventType = "ROLE CLARIFICATION";
+  const prior = await findNotificationDeliveries(recordId, eventType);
+  if (prior.length) return { ok: false, duplicate: true, recordId };
+  const log = await createNotificationLog({ recordId, eventType, subject: email.subject, status: "Pending", summary: "Render paused client-facing communication pending contact-role clarification." });
+  const logRecordId = log.records && log.records[0] && log.records[0].id;
+  const projectReservation = reserveRenderDelivery({ project, workflow: eventType, recipientType: "internal", to: internalTo, subject: email.subject });
+  if (projectReservation.duplicate) return { ok: false, duplicate: true, recordId };
+  try {
+    const threadHeaders = [message.references, message.messageId].filter(Boolean).join(" ");
+    const delivery = await sendMail({
+      to: internalTo,
+      subject: email.subject,
+      html: email.html,
+      text: email.text,
+      headers: threadHeaders ? { ...(message.messageId ? { "In-Reply-To": message.messageId } : {}), References: threadHeaders } : undefined
+    });
+    projectState.updateDelivery(projectReservation.delivery.idempotencyKey, { status: "sent", attempts: delivery.attempts, provider: delivery.provider, messageId: delivery.messageId });
+    if (logRecordId) await updateCommunicationLog(logRecordId, { "Delivery Status": "Sent", Summary: `Delivered by Render via SMTP${delivery.messageId ? `; message ${delivery.messageId}` : ""}` });
+    return { ok: true, recordId, logRecordId };
+  } catch (error) {
+    projectState.updateDelivery(projectReservation.delivery.idempotencyKey, { status: "failed", error: error.message });
+    if (logRecordId) await updateCommunicationLog(logRecordId, { "Delivery Status": "Failed", Summary: `Render delivery failed: ${error.message}` }).catch(() => {});
+    await sendFailureAlert({ workflow: eventType, recordId, error });
+    throw error;
+  }
+}
+
 async function ingestGmailMessage(message) {
   const source = message.contacts && message.contacts.source;
   const clientContacts = message.contacts && message.contacts.client || [];
@@ -655,7 +703,14 @@ async function pollGmailIntake() {
             summary: `Inbound Gmail message received from ${(message.contacts && message.contacts.source && message.contacts.source.email) || "an unclassified contact"}.`
           });
         }
-        airtableSync.push({ messageId: message.id, threadId: message.threadId, communicationLogged: Boolean(communication), ...synced });
+        const clientContacts = (message.contacts && message.contacts.client) || [];
+        const agentContacts = (message.contacts && message.contacts.agent) || [];
+        const unknownContacts = (message.contacts && message.contacts.unknown) || [];
+        let clarification = null;
+        if (synced.recordId && (unknownContacts.length || (clientContacts.length && agentContacts.length))) {
+          clarification = await deliverGmailRoleClarification(project, message, synced.recordId);
+        }
+        airtableSync.push({ messageId: message.id, threadId: message.threadId, communicationLogged: Boolean(communication), roleClarification: clarification, ...synced });
       }
       return project;
     },

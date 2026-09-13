@@ -261,6 +261,13 @@ function propertyReviewEmail(job) {
   return internalEmailShell("PROPERTY REVIEW NEEDED", title, "Render found a property-research result that needs Anna's review before quoting.", rows, bodyText);
 }
 
+function roleClarificationEmail({ propertyAddress = "", contacts = [], recordUrl = "" } = {}) {
+  const people = (Array.isArray(contacts) ? contacts : []).map((contact) => `${text(contact.name, "Unknown contact")} · ${text(contact.email)}`).join("\n");
+  const rows = `<div class="property-head"><div class="eyebrow">Property address</div><h2 class="address">${escapeHtml(propertyAddress)}</h2></div><div class="panel"><strong>Who should receive client-facing messages?</strong><br>Reply with the role for each contact: <strong>CLIENT</strong>, <strong>AGENT</strong>, or <strong>INTERNAL</strong>. Render will not send confirmations, reminders, or quotes to an unclassified contact.</div><div class="notes"><strong>Contacts needing classification</strong><br>${escapeHtml(people || "No contact address was extracted.")}</div><div class="secondary">${internalLink("Open Airtable record", recordUrl)}</div>`;
+  const bodyText = [`ROLE CLARIFICATION`, `Property: ${text(propertyAddress)}`, "Reply with CLIENT, AGENT, or INTERNAL for each listed contact. No client-facing email will be sent until the role is explicit.", people && `Contacts:\n${people}`, recordUrl && `Airtable record: ${recordUrl}`].filter(Boolean).join("\n\n");
+  return internalEmailShell("ROLE CLARIFICATION", text(propertyAddress, "Unclassified Gmail intake"), "Render found an ambiguous contact role and paused client-facing communication.", rows, bodyText);
+}
+
 function followUpEmail(jobs, dateLabel) {
   const list = Array.isArray(jobs) ? jobs : [];
   const title = list.length ? `${list.length} follow-up${list.length === 1 ? "" : "s"} due today` : "No follow-ups due today";
@@ -278,6 +285,7 @@ module.exports = {
   followUpEmail,
   newRequestEmail,
   propertyReviewEmail,
+  roleClarificationEmail,
   quotePricing,
   quoteReadyEmail,
   safeUrl

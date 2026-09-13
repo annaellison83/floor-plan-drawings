@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { clientAppointmentConfirmationEmail, clientAppointmentReminderEmail, clientAvailabilityProposalEmail, clientQuoteEmail, quotePricing, quoteReadyEmail, newRequestEmail } = require("./email-templates");
+const { clientAppointmentConfirmationEmail, clientAppointmentReminderEmail, clientAvailabilityProposalEmail, clientQuoteEmail, quotePricing, quoteReadyEmail, newRequestEmail, roleClarificationEmail } = require("./email-templates");
 
 test("quote ready template escapes all dynamic HTML", () => {
   const rendered = quoteReadyEmail({
@@ -32,6 +32,13 @@ test("client quote email contains one approved amount and escapes client data", 
   assert.match(email.html, /\$365/);
   assert.doesNotMatch(email.html, /<script>/);
   assert.match(email.text, /Quote: \$365/);
+});
+
+test("role clarification email stays internal and asks for an explicit role", () => {
+  const email = roleClarificationEmail({ propertyAddress: "123 Main St", contacts: [{ name: "Conrad", email: "conrad@example.com" }] });
+  assert.match(email.subject, /^ROLE CLARIFICATION \|/);
+  assert.match(email.html, /CLIENT/);
+  assert.match(email.html, /conrad@example.com/);
 });
 
 test("approved client quote can include appointment options", () => {

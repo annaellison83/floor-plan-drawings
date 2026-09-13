@@ -221,6 +221,11 @@ in Render for review and are not written as ambiguous Airtable Jobs.
 When the bridge is first enabled, each poll also backfills up to
 `GMAIL_AIRTABLE_BACKFILL_MAX` previously ingested Gmail projects that are not
 already represented in Airtable (default 5) to avoid Gmail quota spikes.
+When a message has an unknown contact or both a known client and agent with no
+explicit recipient policy, Render sends an internal `ROLE CLARIFICATION` email
+to Anna and records it in Communication Log. It never sends client-facing mail
+until the role is explicit. Set `ENABLE_GMAIL_ROLE_CLARIFICATION=false` to
+pause those notices without disabling intake.
 
 Set `ENABLE_GMAIL_INTAKE_NOTIFICATIONS=true` only after reviewing one manual
 poll. For each labeled message with an extracted property address, Render then
