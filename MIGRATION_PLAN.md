@@ -46,6 +46,12 @@ disabled as part of the preparatory work.
     when no Render project matches. Any strong Gmail match carries the thread ID
     into the proposed Airtable listing; stable calendar UID keys prevent duplicate
     Jobs and no Gmail labels or messages are changed.
+14. Gmail/website/calendar records now converge into Airtable Jobs with
+    idempotent source keys, inbound Communication Log entries, and Anna-only
+    role-clarification notices when contacts are ambiguous. Render also has a
+    disabled-by-default note-normalization preview that preserves Client Notes
+    and proposes structured internal review flags before writing Quote
+    Calculation Notes.
 
 ## Execution order
 
@@ -68,12 +74,16 @@ disabled as part of the preparatory work.
 6. **Operational email parity.** Move follow-ups, reminders, client
    confirmations, and communication logging to Render using the same guarded
    sender and an explicit retry/failure record.
-7. **Delivery resilience.** Add an alert path for failed sends and a carefully
+7. **Note normalization.** Have Anna review
+   `/api/airtable/note-translation-preview`; enable
+   `ENABLE_NOTE_TRANSLATION=true` only after the output is accepted. This
+   writes only blank Quote Calculation Notes and never sends an email.
+8. **Delivery resilience.** Add an alert path for failed sends and a carefully
    bounded fallback provider. Do not retry an ambiguous SMTP result blindly.
-8. **Shadow run.** Leave Airtable automations on, compare Render decisions and
+9. **Shadow run.** Leave Airtable automations on, compare Render decisions and
    delivery logs against Airtable for a representative set of jobs, and send
    controlled test messages.
-9. **Cutover.** Only after shadow-run success and Anna's approval, pause the
+10. **Cutover.** Only after shadow-run success and Anna's approval, pause the
    corresponding Airtable email automations one at a time. Keep Airtable as the
    dashboard/source of truth and retain the rollback path.
 
