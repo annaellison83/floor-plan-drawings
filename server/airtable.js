@@ -40,6 +40,7 @@ function mapJob(record, options = {}) {
     gmailMessageId: first(fields, ["Gmail Message ID"]),
     normalizedPropertyKey: first(fields, ["Normalized Property Key"]),
     sourceChannels: first(fields, ["Source Channels"]),
+    clientNotes: first(fields, ["Client Notes"]),
     service: first(fields, ["Drawing Style", "Service Requested", "Service"]),
     scope: first(fields, ["Scope", "Unit / Suite / Scope Detail"]),
     workflow: first(fields, ["Website Workflow", "Workflow", "Request Type"]) || "Quick Quote",
@@ -330,6 +331,17 @@ async function listPropertyReviewCandidates(options = {}) {
   return (await airtableJson(url.href, { token: settings.token })).records || [];
 }
 
+async function listNoteTranslationCandidates(options = {}) {
+  const settings = { ...config(), ...options };
+  if (!settings.token || !settings.baseId) throw new Error("Airtable is not configured");
+  const formula = "AND({Website Workflow}='Quick Quote',{Client Notes}!='',{Quote Calculation Notes}='')";
+  const table = settings.jobsTableId || settings.jobsTable;
+  const url = new URL(`${AIRTABLE_API}/${encodeURIComponent(settings.baseId)}/${encodeURIComponent(table)}`);
+  url.searchParams.set("filterByFormula", formula);
+  url.searchParams.set("maxRecords", String(Math.max(1, Math.min(50, Number(options.maxRecords) || 20))));
+  return (await airtableJson(url.href, { token: settings.token })).records || [];
+}
+
 async function listFollowUpCandidates(options = {}) {
   const settings = { ...config(), ...options };
   if (!settings.token || !settings.baseId) throw new Error("Airtable is not configured");
@@ -466,6 +478,7 @@ module.exports = {
   listJobs,
   listFailedDeliveries,
   listNewRequestCandidates,
+  listNoteTranslationCandidates,
   listPropertyReviewCandidates,
   listQuoteReadyCandidates,
   mapJob,

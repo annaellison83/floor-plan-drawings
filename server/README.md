@@ -5,6 +5,9 @@ Netlify remains the public intake website and Airtable remains the dashboard and
 source of truth. Render currently sends QUOTE READY, approved client quotes,
 NEW REQUEST, PROPERTY REVIEW NEEDED, and the daily FOLLOW-UP digest with
 idempotent Communication Log reservations. It does not create calendar events.
+Client-note normalization is staged behind `ENABLE_NOTE_TRANSLATION=false` and
+must be reviewed through the read-only
+`GET /api/airtable/note-translation-preview` endpoint before enabling writes.
 
 ## Render settings
 

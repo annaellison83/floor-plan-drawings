@@ -99,12 +99,17 @@ automation in Airtable after Anna signs into the Automations UI and confirms
 Render delivery. QUOTE READY, approved client quote, and note-translation
 automations remain available while their Render equivalents are verified.
 
-The note-translation automation remains deliberately unchanged for now. Its
-AI rewrite needs a separately selected model/provider and an explicit comparison
-against the current Airtable output before Render writes `Quote Calculation
-Notes`. Client confirmations and reminders likewise remain on their existing
-Airtable paths until their exact trigger/state contract is documented and a
-Render sender has passed a controlled test.
+Render now has a feature-flagged, deterministic note-normalization path. It
+reads `Client Notes`, preserves the original wording, adds explicit review
+flags for rush, partial/non-standard scope, site/orientation, 3D, and access
+requests, and writes only empty `Quote Calculation Notes` fields. The protected
+`GET /api/airtable/note-translation-preview` endpoint is read-only and should be
+reviewed by Anna before `ENABLE_NOTE_TRANSLATION=true` is enabled. This staged
+baseline does not claim parity with Airtable's AI rewrite; selecting an external
+AI provider can remain a later enhancement without changing the data contract.
+Client confirmations and reminders likewise remain on their existing Airtable
+paths until their exact trigger/state contract is documented and a Render
+sender has passed a controlled test.
 
 The scheduled follow-up job must run at 8:00 AM America/Los_Angeles and must
 not send an empty digest.
@@ -128,7 +133,7 @@ added to the service price.
 
 ## Safe cutover order
 
-1. AI note translation (no external message)
+1. Note normalization (internal-only; preview first)
 2. Internal `PROPERTY REVIEW NEEDED`
 3. Internal `NEW REQUEST`
 4. Internal `QUOTE READY`

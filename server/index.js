@@ -16,6 +16,7 @@ const { hasFallbackSmtp, isSmtpConfigured, sendFailureAlert, sendMail, verifySmt
 const { projectState, recipientsFor } = require("./project-state");
 const { createGmailClient, isGmailConfigured, isLikelyFloorPlanIntake, parseGmailMessage, processIntakeMessages } = require("./gmail-runtime");
 const { findGmailAirtableMatch, gmailAirtableFields, patchMissingGmailFields } = require("./gmail-airtable-sync");
+const { translateClientNotes } = require("./note-translation");
 const {
   clientQuoteEmail,
   clientAvailabilityProposalEmail,
@@ -43,6 +44,7 @@ const {
   listFailedDeliveries,
   listFollowUpCandidates,
   listNewRequestCandidates,
+  listNoteTranslationCandidates,
   listPropertyReviewCandidates,
   listQuoteReadyCandidates,
   listJobs,
@@ -81,6 +83,7 @@ let followUpRunDate = "";
 const appointmentLifecycleLocks = new Set();
 let appointmentReminderPollRunning = false;
 let calendarSyncPollRunning = false;
+let noteTranslationPollRunning = false;
 
 function clean(value) {
   return value === undefined || value === null ? "" : String(value).trim();
@@ -190,6 +193,7 @@ function integrationStatus() {
     appointmentConfirmationEnabled: appointmentConfirmationEnabled(),
     appointmentReminderEnabled: appointmentReminderEnabled(),
     gmailIntakeNotificationEnabled: gmailIntakeNotificationEnabled(),
+    noteTranslationEnabled: noteTranslationEnabled(),
     calendarAirtableSyncEnabled: calendarAirtableSyncEnabled(),
     calendarGmailLabelSyncEnabled: calendarGmailLabelSyncEnabled()
   };
@@ -213,6 +217,10 @@ function propertyReviewEnabled() {
 
 function followUpEnabled() {
   return clean(process.env.ENABLE_FOLLOW_UP_SENDS).toLowerCase() === "true";
+}
+
+function noteTranslationEnabled() {
+  return clean(process.env.ENABLE_NOTE_TRANSLATION).toLowerCase() === "true";
 }
 
 function shadowEnabled(workflow) {
@@ -1507,6 +1515,32 @@ async function pollPropertyReviews() {
   }
 }
 
+async function translateAndSaveQuoteNotes(recordId) {
+  const job = await getJob(recordId);
+  if (!job.clientNotes) return { ok: true, skipped: true, reason: "Client Notes is empty", recordId };
+  if (job.quoteNotes) return { ok: true, skipped: true, reason: "Quote Calculation Notes already populated", recordId };
+  const translated = translateClientNotes(job.clientNotes, job);
+  if (!translated) return { ok: true, skipped: true, reason: "No translatable note content", recordId };
+  await updateJob(recordId, { "Quote Calculation Notes": translated });
+  projectState.event({ projectId: recordId, type: "quote.notes.translated", actor: "render", data: { source: "Client Notes", destination: "Quote Calculation Notes" } });
+  return { ok: true, recordId, updated: true };
+}
+
+async function pollNoteTranslations() {
+  if (!noteTranslationEnabled() || noteTranslationPollRunning) return;
+  noteTranslationPollRunning = true;
+  try {
+    for (const candidate of await listNoteTranslationCandidates()) {
+      const result = await translateAndSaveQuoteNotes(candidate.id);
+      console.log(`NOTE TRANSLATION poll ${candidate.id}: ${result.updated ? "updated" : result.reason || "skipped"}`);
+    }
+  } catch (error) {
+    console.error(`NOTE TRANSLATION poll failed: ${error.message}`);
+  } finally {
+    noteTranslationPollRunning = false;
+  }
+}
+
 async function pollFollowUps() {
   const today = localDate();
   if (!followUpEnabled() || followUpPollRunning || followUpRunDate === today || !followUpDueNow()) return;
@@ -2216,6 +2250,27 @@ async function route(req, res) {
     }
   }
 
+  if (req.method === "GET" && url.pathname === "/api/airtable/note-translation-preview") {
+    if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+    try {
+      const candidates = await listNoteTranslationCandidates({ maxRecords: url.searchParams.get("maxRecords") });
+      const jobs = [];
+      for (const candidate of candidates) {
+        const job = await getJob(candidate.id);
+        jobs.push({
+          recordId: job.recordId,
+          propertyAddress: job.propertyAddress,
+          clientName: job.clientName,
+          source: job.clientNotes,
+          translated: translateClientNotes(job.clientNotes, job)
+        });
+      }
+      return json(res, 200, { ok: true, readOnly: true, dryRun: true, writeEnabled: noteTranslationEnabled(), candidateCount: jobs.length, jobs });
+    } catch (error) {
+      return json(res, 502, { error: "Note translation preview failed", detail: error.message });
+    }
+  }
+
   if (req.method === "POST" && url.pathname === "/api/email/test") {
     if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
 
@@ -2372,4 +2427,6 @@ server.listen(PORT, "0.0.0.0", () => {
     setTimeout(() => pollGmailIntake().catch((error) => console.error(`Gmail intake poll failed: ${error.message}`)), 12000).unref();
     setInterval(() => pollGmailIntake().catch((error) => console.error(`Gmail intake poll failed: ${error.message}`)), Number(process.env.GMAIL_INTAKE_POLL_MS) || 120000).unref();
   }
+  setTimeout(pollNoteTranslations, 14000).unref();
+  setInterval(pollNoteTranslations, Number(process.env.NOTE_TRANSLATION_POLL_MS) || 60000).unref();
 });
