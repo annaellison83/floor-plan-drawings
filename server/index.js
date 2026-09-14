@@ -1456,7 +1456,7 @@ async function deliverInternalNotification(recordId, eventType, buildEmail, stat
     const project = syncProjectState(job);
     const internalTo = [clean(process.env.SMTP_USER)];
     if (!internalTo[0]) throw new Error("SMTP_USER is not configured");
-    const email = buildEmail(job);
+    const email = buildEmail(await prepareEmailAssets(job));
     if (shadowEnabled(eventType)) {
       return { ok: true, shadow: true, status: 200, recordId, eventType, subject: email.subject, delivery: "not-sent" };
     }
