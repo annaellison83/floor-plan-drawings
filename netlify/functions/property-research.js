@@ -395,9 +395,14 @@ function buildZimasPointQueryUrl(endpoint, x, y, outFields) {
     geometryType: "esriGeometryPoint",
     inSR: "4326",
     spatialRel: "esriSpatialRelIntersects",
+    // Address geocoders often land on the curb rather than inside the parcel.
+    // A small nearest-parcel radius recovers the PIN without opening a broad,
+    // ambiguous search result.
+    distance: "100",
+    units: "esriSRUnit_Foot",
     outFields,
     returnGeometry: "false",
-    resultRecordCount: "5",
+    resultRecordCount: "1",
     f: "json"
   });
   return `${endpoint}?${params.toString()}`;
