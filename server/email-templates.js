@@ -52,7 +52,8 @@ function detail(label, value) {
 }
 
 function imageCard(number, label, imageUrl, linkUrl, fallbackUrl) {
-  const image = safeUrl(imageUrl);
+  const candidate = safeUrl(imageUrl);
+  const image = candidate && !/earth\.google\.com|google\.com\/maps\/search/i.test(candidate) ? candidate : "";
   const link = safeUrl(linkUrl || imageUrl);
   if (!image) {
     const fallback = safeUrl(fallbackUrl || linkUrl);
@@ -87,7 +88,7 @@ function quoteReadyEmail(job) {
   // Keep the inline image source limited to a preflighted cache URL or a
   // currently-live Airtable attachment. A stale ArcGIS URL must never reach
   // the email client as an <img> source.
-  job = { ...job, mapUrl: mapUrl || "", aerialAttachmentUrl: mapUrl || "" };
+  job = { ...job, mapUrl: mapUrl || safeUrl(job.emailAerialLink) || "", aerialAttachmentUrl: mapUrl || safeUrl(job.emailAerialLink) || "" };
   const contextMapUrl = safeUrl(job.contextMapUrl);
   const subject = `QUOTE READY | ${address}`;
 
@@ -242,7 +243,7 @@ function newRequestEmail(job) {
   const details = [job.service, job.scope, job.tourRequested && `3D tour: ${job.tourRequested}`].filter(Boolean).join("\n");
   const contact = [job.clientEmail, job.clientPhone].filter(Boolean).join(" · ");
   const emailAerialUrl = safeUrl(job.emailAerialUrl || job.aerialAttachmentUrl || job.mapUrl);
-  job = { ...job, mapUrl: emailAerialUrl || "" };
+  job = { ...job, mapUrl: emailAerialUrl || safeUrl(job.emailAerialLink) || "" };
   const imageRows = `${imageCard("01", "Property close-up", job.mapUrl, job.mapUrl)}${imageCard("02", "Greater LA context", job.contextMapUrl, job.contextMapUrl)}`;
   const availabilityPanel = availabilityReviewUrl
     ? `<div class="availability"><div class="eyebrow">Optional appointment availability</div><div class="muted" style="margin-top:8px;">Review the live employee calendars and send the client up to three recommended appointment times. No calendar event is created by this step.</div><div class="button-wrap"><a class="button" href="${escapeHtml(availabilityReviewUrl)}">Check availability &amp; send options</a></div></div>`

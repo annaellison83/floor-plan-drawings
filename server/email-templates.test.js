@@ -109,6 +109,17 @@ test("quote ready email exposes the separate availability proposal action", () =
   assert.match(text, /Check availability and send appointment options/);
 });
 
+test("quote ready email never embeds an expired ArcGIS print artifact", () => {
+  const { html } = quoteReadyEmail({
+    propertyAddress: "123 Main St, Los Angeles, CA",
+    suggestedQuote: 345,
+    mapUrl: "https://utility.arcgisonline.com/arcgis/rest/directories/arcgisoutput/expired.jpg",
+    contextMapUrl: "https://maps.googleapis.com/maps/api/staticmap?center=34,-118"
+  });
+  assert.doesNotMatch(html, /utility\.arcgisonline\.com\/arcgisoutput/);
+  assert.doesNotMatch(html, /<img[^>]+src="https:\/\/utility/);
+});
+
 test("zone pricing uses the minimum as a floor, not an add-on", () => {
   const zoneThree = quotePricing({ quoteZone: "Zone 3", baseServiceQuote: 200 });
   assert.equal(zoneThree.zoneNumber, 3);
