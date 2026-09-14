@@ -61,6 +61,13 @@ const {
   intakeAuthorized,
   validateIntakeEnvelope
 } = require("./intake");
+const {
+  credentialsMatch,
+  createSession,
+  sessionCookie,
+  clearSessionCookie,
+  sessionFromRequest
+} = require("./portal-auth");
 
 const PORT = Number(process.env.PORT) || 10000;
 const SERVICE_NAME = "floorplan-drawings-backend";
@@ -134,11 +141,12 @@ function reserveRenderDelivery({ project, workflow, recipientType, to, subject, 
   });
 }
 
-function json(res, status, body) {
+function json(res, status, body, extraHeaders = {}) {
   res.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store",
-    "X-Content-Type-Options": "nosniff"
+    "X-Content-Type-Options": "nosniff",
+    ...extraHeaders
   });
   res.end(JSON.stringify(body));
 }
@@ -156,8 +164,8 @@ function html(res, status, body) {
 
 function isAuthorized(req) {
   const expected = clean(process.env.INTERNAL_ADMIN_TOKEN);
-  if (!expected) return false;
-  return clean(req.headers["x-admin-token"]) === expected;
+  if (expected && clean(req.headers["x-admin-token"]) === expected) return true;
+  return Boolean(sessionFromRequest(req));
 }
 
 function integrationStatus() {
@@ -1741,6 +1749,32 @@ async function route(req, res) {
 
   if (req.method === "GET" && (url.pathname === "/master" || url.pathname === "/master/")) {
     return html(res, 200, portalPage());
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/portal/login") {
+    try {
+      const body = await readJsonBody(req);
+      const username = clean(body.username);
+      const password = body.password === undefined ? "" : String(body.password);
+      if (!clean(process.env.PORTAL_USERNAME) || !clean(process.env.PORTAL_PASSWORD)) {
+        return json(res, 503, { error: "Portal login is not configured. Set PORTAL_USERNAME and PORTAL_PASSWORD in Render." });
+      }
+      if (!credentialsMatch(username, password)) return json(res, 401, { error: "Incorrect username or password." });
+      const session = createSession(username);
+      if (!session) return json(res, 503, { error: "Portal session signing is not configured." });
+      return json(res, 200, { ok: true, authenticated: true, username }, { "Set-Cookie": sessionCookie(session, true) });
+    } catch (error) {
+      return json(res, 400, { error: error.message });
+    }
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/portal/session") {
+    const session = sessionFromRequest(req);
+    return json(res, 200, { ok: true, authenticated: Boolean(session), username: session && session.username });
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/portal/logout") {
+    return json(res, 200, { ok: true }, { "Set-Cookie": clearSessionCookie(true) });
   }
 
   if (req.method === "GET" && url.pathname === "/api/portal/jobs") {

@@ -23,9 +23,21 @@ Set these in the Render service, never in GitHub:
 - `ICLOUD_EMAIL`: Anna's iCloud/Apple Account email
 - `ICLOUD_APP_PASSWORD`: Anna's app-specific password
 - `INTERNAL_ADMIN_TOKEN`: a separate random token for the private test endpoint
+- `PORTAL_USERNAME`: username for the private master portal (for example, `anna`)
+- `PORTAL_PASSWORD`: private master portal password. Enter it directly in Render;
+  never commit it or paste it into ChatGPT, GitHub, or a terminal transcript.
+- `PORTAL_SESSION_SECRET`: optional random signing key for portal sessions. If
+  omitted, sessions are signed with `INTERNAL_ADMIN_TOKEN`.
 - `RENDER_INTAKE_TOKEN`: a separate random shared secret used only by the
   Netlify website intake function. Set the same value in the Netlify site
   environment and Render; do not reuse `INTERNAL_ADMIN_TOKEN`.
+
+The master portal at `https://master.floorplandrawings.com/` uses
+`PORTAL_USERNAME` and `PORTAL_PASSWORD`. On successful sign-in it sets an
+HttpOnly, Secure session cookie that lasts 30 days, so Chrome can save the
+credentials and Anna does not need to re-enter a token on every visit. Logging
+out clears the cookie. The `X-Admin-Token` header remains supported for API and
+break-glass access.
 
 The iCloud endpoint is:
 
