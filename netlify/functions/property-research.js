@@ -382,7 +382,7 @@ function buildAssessorPublicUrl(ain) {
   return value ? `${COUNTY_ASSESSOR_PORTAL_URL}/${value}` : "";
 }
 
-function buildZimasPointQueryUrl(endpoint, x, y, outFields) {
+function buildZimasPointQueryUrl(endpoint, x, y, outFields, options = {}) {
   // ZIMAS parcel layers are published in State Plane (102645). Sending the
   // web-map meters used by the county services as `inSR=3857` silently returns
   // no parcels. WGS84 lon/lat lets ArcGIS perform the projection reliably.
@@ -395,11 +395,25 @@ function buildZimasPointQueryUrl(endpoint, x, y, outFields) {
     // Address geocoders often land on the curb rather than inside the parcel.
     // A small nearest-parcel radius recovers the PIN without opening a broad,
     // ambiguous search result.
-    distance: "100",
-    units: "esriSRUnit_Foot",
     outFields,
     returnGeometry: "false",
     resultRecordCount: "1",
+    f: "json"
+  });
+  if (Number.isFinite(Number(options.distanceFeet)) && Number(options.distanceFeet) > 0) {
+    params.set("distance", String(Number(options.distanceFeet)));
+    params.set("units", "esriSRUnit_Foot");
+  }
+  return `${endpoint}?${params.toString()}`;
+}
+
+function buildZimasParcelQueryUrl(endpoint, bpp, outFields) {
+  const parcelId = clean(bpp).replace(/[^0-9]/g, "");
+  const params = new URLSearchParams({
+    where: `BPP = '${escapeArcgisLiteral(parcelId)}'`,
+    outFields,
+    returnGeometry: "false",
+    resultRecordCount: "10",
     f: "json"
   });
   return `${endpoint}?${params.toString()}`;
@@ -456,12 +470,19 @@ function getArea(attributes) {
   ].map(clean).find(Boolean) || "";
 }
 
-async function lookupZimas(x, y) {
-  const landbaseUrl = buildZimasPointQueryUrl(
+async function lookupZimas(x, y, expectedBpp = "") {
+  const exactLandbaseUrl = buildZimasPointQueryUrl(
     ZIMAS_LANDBASE_QUERY_URL,
     x,
     y,
     "PIN,PIND,BPP,BOOK,PAGE,PARCEL,Shape_Area"
+  );
+  const nearbyLandbaseUrl = buildZimasPointQueryUrl(
+    ZIMAS_LANDBASE_QUERY_URL,
+    x,
+    y,
+    "PIN,PIND,BPP,BOOK,PAGE,PARCEL,Shape_Area",
+    { distanceFeet: 100 }
   );
   const zoningUrl = buildZimasPointQueryUrl(
     ZIMAS_ZONING_QUERY_URL,
@@ -470,29 +491,58 @@ async function lookupZimas(x, y) {
     "ZONE_CMPLT,ZONE_CLASS,ZONELEGEND"
   );
 
-  const [landbaseResult, zoningResult] = await Promise.all([
-    // ZIMAS can take 10–15 seconds to project a WGS84 point and search the
-    // parcel layer. Keep the normal API timeout short, but give this lookup
-    // enough room to return a real PIN instead of silently showing “unavailable”.
-    fetchJson(landbaseUrl, { timeoutMs: 20000 }),
-    fetchJson(zoningUrl, { timeoutMs: 20000 })
-  ]);
-  const parcels = (landbaseResult.features || []).map((feature) => feature.attributes || {});
+  // Prefer an exact point intersection. A radius query with resultRecordCount=1
+  // can return an arbitrary neighboring parcel when the geocoder point lands
+  // near a boundary (which caused 723 Terrace 49 to resolve to the wrong PIN).
+  let landbaseUrl = exactLandbaseUrl;
+  let landbaseResult = await fetchJson(exactLandbaseUrl, { timeoutMs: 20000 });
+  let parcels = landbaseResult.features || [];
+  const expected = clean(expectedBpp).replace(/[^0-9]/g, "");
+  const hasExpectedParcel = expected && parcels.some((feature) => {
+    const value = clean(feature && feature.attributes && feature.attributes.BPP).replace(/[^0-9]/g, "");
+    return value === expected;
+  });
+
+  // When the point is on a curb or an exact match disagrees with the county
+  // assessor AIN, ask ZIMAS directly for the assessor parcel before using a
+  // nearby spatial fallback.
+  if (expected && !hasExpectedParcel) {
+    const parcelUrl = buildZimasParcelQueryUrl(
+      ZIMAS_LANDBASE_QUERY_URL,
+      expected,
+      "PIN,PIND,BPP,BOOK,PAGE,PARCEL,Shape_Area"
+    );
+    const parcelResult = await fetchJson(parcelUrl, { timeoutMs: 20000 }).catch(() => null);
+    if (parcelResult && Array.isArray(parcelResult.features) && parcelResult.features.length) {
+      landbaseUrl = parcelUrl;
+      landbaseResult = parcelResult;
+      parcels = parcelResult.features;
+    }
+  }
+
+  if (!parcels.length) {
+    landbaseUrl = nearbyLandbaseUrl;
+    landbaseResult = await fetchJson(nearbyLandbaseUrl, { timeoutMs: 20000 });
+    parcels = landbaseResult.features || [];
+  }
+
+  const zoningResult = await fetchJson(zoningUrl, { timeoutMs: 20000 });
+  const parcelAttributes = (landbaseResult.features || []).map((feature) => feature.attributes || {});
   const zones = (zoningResult.features || []).map((feature) => feature.attributes || {});
 
   return {
-    status: parcels.length === 1 ? "Matched" : parcels.length > 1 ? "Needs Manual Review" : "No Match",
+    status: parcelAttributes.length === 1 ? "Matched" : parcelAttributes.length > 1 ? "Needs Manual Review" : "No Match",
     sourceUrl: landbaseUrl,
-    parcel: parcels.length === 1 ? {
-      pin: clean(parcels[0].PIN),
-      apn: clean(parcels[0].BPP),
-      lotSizeSqFt: Number.isFinite(Number(parcels[0].Shape_Area))
-        ? Math.round(Number(parcels[0].Shape_Area))
+    parcel: parcelAttributes.length === 1 ? {
+      pin: clean(parcelAttributes[0].PIN),
+      apn: clean(parcelAttributes[0].BPP),
+      lotSizeSqFt: Number.isFinite(Number(parcelAttributes[0].Shape_Area))
+        ? Math.round(Number(parcelAttributes[0].Shape_Area))
         : null
     } : null,
     zoning: zones.length ? clean(zones[0].ZONE_CMPLT) : "",
     zoneSourceUrl: zoningUrl,
-    parcelCount: parcels.length
+    parcelCount: parcelAttributes.length
   };
 }
 
@@ -616,7 +666,7 @@ async function researchFromLocation(address, source) {
   let aerialUrl = "";
   let contextMapUrl = "";
   const [zimasResult, assessorResult, aerialResult] = await Promise.all([
-    lookupZimas(point.x, point.y).catch((error) => {
+    lookupZimas(point.x, point.y, source.ain).catch((error) => {
       console.warn("ZIMAS lookup failed", error.message);
       return null;
     }),
