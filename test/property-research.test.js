@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { buildUpdateFields } = require("../netlify/functions/property-research");
+const { buildUpdateFields, buildZimasPointQueryUrl } = require("../netlify/functions/property-research");
 
 function researchAtDistances(milesFromNorthHollywood, milesFromMontereyPark) {
   return {
@@ -37,4 +37,10 @@ test("a manually assigned quote zone is preserved", () => {
 test("property research exposes a clickable Google Maps link", () => {
   const fields = buildUpdateFields(researchAtDistances(11.9, 5.3), {});
   assert.equal(fields["Google Maps Link"], "https://www.google.com/maps/search/?api=1&query=228%20East%20Avenue%2042%2C%20Los%20Angeles%2C%20CA%2090031");
+});
+
+test("ZIMAS parcel queries use WGS84 coordinates for projection", () => {
+  const url = new URL(buildZimasPointQueryUrl("https://zimas.example/query", -13150000, 4030000, "PIN"));
+  assert.equal(url.searchParams.get("inSR"), "4326");
+  assert.match(url.searchParams.get("geometry"), /^-\d+\.\d+?,\d+\.\d+$/);
 });

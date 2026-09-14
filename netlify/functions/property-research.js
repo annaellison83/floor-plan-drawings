@@ -386,10 +386,14 @@ function buildAssessorPublicUrl(ain) {
 }
 
 function buildZimasPointQueryUrl(endpoint, x, y, outFields) {
+  // ZIMAS parcel layers are published in State Plane (102645). Sending the
+  // web-map meters used by the county services as `inSR=3857` silently returns
+  // no parcels. WGS84 lon/lat lets ArcGIS perform the projection reliably.
+  const location = webMercatorToLatLon(x, y);
   const params = new URLSearchParams({
-    geometry: `${x},${y}`,
+    geometry: `${location.lon},${location.lat}`,
     geometryType: "esriGeometryPoint",
-    inSR: "3857",
+    inSR: "4326",
     spatialRel: "esriSpatialRelIntersects",
     outFields,
     returnGeometry: "false",
@@ -950,3 +954,4 @@ exports.researchAddress = researchAddress;
 exports.buildUpdateFields = buildUpdateFields;
 exports.buildCountyAerialUrl = buildCountyAerialUrl;
 exports.buildContextMapUrl = buildContextMapUrl;
+exports.buildZimasPointQueryUrl = buildZimasPointQueryUrl;
