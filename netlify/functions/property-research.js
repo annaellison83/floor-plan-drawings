@@ -357,15 +357,10 @@ async function buildCountyAerialUrl(location) {
 
 function buildZimasPublicUrl(pin, address) {
   if (!clean(pin)) return "";
-
-  const params = new URLSearchParams({
-    Cmd: "zoom1ToPIN",
-    PIN: clean(pin),
-    MultiSelPin: clean(pin),
-    SelectedMultiAddress: clean(address),
-    ToolTips: "true"
-  });
-  return `https://zimas.lacity.org/map.asp?${params.toString()}`;
+  // The legacy map.asp route now falls back to a generic search in many
+  // browsers. ProjectDataTab is the current ZIMAS deep link and accepts the
+  // parcel PIN directly, opening the parcel details for the requested job.
+  return `https://zimas.lacity.org/zimas-classic/ProjectDataTab?pin=${encodeURIComponent(clean(pin))}`;
 }
 
 function buildGoogleMapsSearchUrl(address) {

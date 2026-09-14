@@ -18,7 +18,7 @@ const { projectState, recipientsFor } = require("./project-state");
 const { createGmailClient, isGmailConfigured, isLikelyFloorPlanIntake, parseGmailMessage, processIntakeMessages } = require("./gmail-runtime");
 const { findGmailAirtableMatch, gmailAirtableFields, patchMissingGmailFields } = require("./gmail-airtable-sync");
 const { translateClientNotes } = require("./note-translation");
-const { prepareEmailAssets, readAsset } = require("./image-assets");
+const { assetFilename, prepareEmailAssets, readAsset } = require("./image-assets");
 const {
   clientQuoteEmail,
   clientAvailabilityProposalEmail,
@@ -1735,6 +1735,25 @@ async function route(req, res) {
       "X-Content-Type-Options": "nosniff"
     });
     return fs.createReadStream(filePath).pipe(res);
+  }
+  if (req.method === "GET" && url.pathname === "/assets/property-aerial") {
+    const address = clean(url.searchParams.get("address"));
+    if (!address) return json(res, 400, { error: "Address is required" });
+    try {
+      const prepared = await prepareEmailAssets({ propertyAddress: address });
+      const source = clean(prepared.emailAssetSource);
+      const filePath = source ? readAsset(assetFilename(source)) : null;
+      if (!filePath) return json(res, 404, { error: "Aerial image unavailable" });
+      res.writeHead(200, {
+        "Content-Type": "image/jpeg",
+        "Cache-Control": "public, max-age=86400",
+        "X-Content-Type-Options": "nosniff"
+      });
+      return fs.createReadStream(filePath).pipe(res);
+    } catch (error) {
+      console.warn("Portal aerial asset failed", error.message);
+      return json(res, 502, { error: "Aerial image unavailable" });
+    }
   }
   if (req.method === "GET" && url.pathname === "/" && host === "master.floorplandrawings.com") {
     return html(res, 200, portalPage());
