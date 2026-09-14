@@ -298,5 +298,17 @@ The current project-state store is durable only when `STATE_FILE` points at a
 persistent Render disk. Until that is provisioned, Airtable remains the
 recovery source and the Gmail poller should stay disabled.
 
+## Portal intake dropbox
+
+The authenticated master portal includes a **Paste a request** section for
+text-message, email, or voice-note transcripts that did not arrive through the
+website or Gmail label. Render extracts the street address and any email/phone
+it can identify, adds Google Maps, ZIMAS, and aerial links, then matches a
+single existing Airtable Job by normalized address before creating anything.
+The request text is retained as the original request/client notes for Anna to
+review. An optional HTTPS photo/card URL can be attached; raw passwords and
+credentials are never accepted. The endpoint is `POST /api/portal/intake` and
+uses the same portal session as the Jobs view.
+
 `GET /healthz` reports this as `integrations.renderStateDurable`; it is `false`
 when the service is using the in-memory safety mode.
