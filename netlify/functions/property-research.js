@@ -1010,3 +1010,4 @@ exports.buildUpdateFields = buildUpdateFields;
 exports.buildCountyAerialUrl = buildCountyAerialUrl;
 exports.buildContextMapUrl = buildContextMapUrl;
 exports.buildZimasPointQueryUrl = buildZimasPointQueryUrl;
+exports.buildZimasParcelQueryUrl = buildZimasParcelQueryUrl;

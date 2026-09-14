@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { buildUpdateFields, buildZimasPointQueryUrl } = require("../netlify/functions/property-research");
+const { buildUpdateFields, buildZimasPointQueryUrl, buildZimasParcelQueryUrl } = require("../netlify/functions/property-research");
 
 function researchAtDistances(milesFromNorthHollywood, milesFromMontereyPark) {
   return {
@@ -43,4 +43,10 @@ test("ZIMAS parcel queries use WGS84 coordinates for projection", () => {
   const url = new URL(buildZimasPointQueryUrl("https://zimas.example/query", -13150000, 4030000, "PIN"));
   assert.equal(url.searchParams.get("inSR"), "4326");
   assert.match(url.searchParams.get("geometry"), /^-\d+\.\d+?,\d+\.\d+$/);
+});
+
+test("ZIMAS parcel fallback queries the validated assessor parcel", () => {
+  const url = new URL(buildZimasParcelQueryUrl("https://zimas.example/query", "5471-014-005", "PIN,BPP"));
+  assert.equal(url.searchParams.get("where"), "BPP = '5471014005'");
+  assert.equal(url.searchParams.get("returnGeometry"), "false");
 });
