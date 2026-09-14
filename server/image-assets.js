@@ -93,6 +93,34 @@ async function prepareEmailAssets(job = {}, options = {}) {
       failures.push(`${sourceUrl}: ${error.message}`);
     }
   }
+
+  // ArcGIS PrintingTools URLs are temporary artifacts. If an Airtable record
+  // contains one that has expired, ask the read-only property-research
+  // endpoint for a fresh export before falling back to a clickable map link.
+  const address = clean(job.propertyAddress);
+  if (address && options.regenerate !== false) {
+    try {
+      const endpoint = clean((options.env || process.env).PROPERTY_RESEARCH_URL)
+        || "https://floorplandrawings.com/.netlify/functions/property-research";
+      const requestUrl = new URL(endpoint);
+      requestUrl.searchParams.set("address", address);
+      const fetchImpl = options.fetchImpl || globalThis.fetch;
+      const response = await fetchImpl(requestUrl.href, { headers: { Accept: "application/json" } });
+      const body = await response.json().catch(() => ({}));
+      const freshUrl = clean(body && body.research && body.research.candidate && body.research.candidate.aerialUrl);
+      if (!response.ok || !freshUrl) throw new Error(`property research returned ${response && response.status || "no aerial"}`);
+      const cached = await cacheRemoteImage(freshUrl, options);
+      return {
+        ...job,
+        emailAerialUrl: cached.url,
+        emailAerialLink: freshUrl,
+        emailAssetSource: freshUrl,
+        emailAssetError: failures.join("; ")
+      };
+    } catch (error) {
+      failures.push(`fresh property research: ${error.message}`);
+    }
+  }
   return {
     ...job,
     emailAerialUrl: "",
