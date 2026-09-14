@@ -772,8 +772,15 @@ function buildUpdateFields(research, existingFields) {
   ].map((item) => item && item.name ? item.name : clean(item)).join(" ");
   const needsUnitReview = /\b(duplex|triplex|fourplex|apartment|multi[-\s]?unit|multifamily|condo|unit|suite|commercial|partial|adu|guest house)\b/i.test(complexityText);
   const hasParcel = Boolean(zimas && zimas.parcel);
-  const zimasPublicUrl = hasParcel
-    ? buildZimasPublicUrl(zimas.parcel.pin, candidate.fullAddress || research.address)
+  // ZIMAS occasionally returns no geometry even for an LA City parcel. When
+  // the county candidate is explicitly inside Los Angeles, its AIN is still a
+  // useful click-through key; keep the PIN field itself reserved for verified
+  // ZIMAS results.
+  const zimasPin = hasParcel
+    ? zimas.parcel.pin
+    : research.laCityMatch === "Matched" ? candidate.ain : "";
+  const zimasPublicUrl = zimasPin
+    ? buildZimasPublicUrl(zimasPin, candidate.fullAddress || research.address)
     : "";
   const assessor = research.countyAssessor;
   const quoteZone = resolveQuoteZone({

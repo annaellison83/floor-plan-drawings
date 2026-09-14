@@ -33,3 +33,8 @@ test("a manually assigned quote zone is preserved", () => {
   const fields = buildUpdateFields(researchAtDistances(11.9, 5.3), { "Quote Zone": "Zone 4" });
   assert.equal(fields["Quote Zone"], "Zone 4");
 });
+
+test("property research exposes a clickable Google Maps link", () => {
+  const fields = buildUpdateFields(researchAtDistances(11.9, 5.3), {});
+  assert.equal(fields["Google Maps Link"], "https://www.google.com/maps/search/?api=1&query=228%20East%20Avenue%2042%2C%20Los%20Angeles%2C%20CA%2090031");
+});
