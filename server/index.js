@@ -1756,12 +1756,24 @@ async function route(req, res) {
       const body = await readJsonBody(req);
       const username = clean(body.username);
       const password = body.password === undefined ? "" : String(body.password);
+      const wantsHtml = String(req.headers.accept || "").includes("text/html");
       if (!clean(process.env.PORTAL_USERNAME) || !clean(process.env.PORTAL_PASSWORD)) {
+        if (wantsHtml) return html(res, 503, "<!doctype html><title>Portal login unavailable</title><p>Portal login is not configured. Set PORTAL_USERNAME and PORTAL_PASSWORD in Render.</p><p><a href=\"/\">Back to portal</a></p>");
         return json(res, 503, { error: "Portal login is not configured. Set PORTAL_USERNAME and PORTAL_PASSWORD in Render." });
       }
-      if (!credentialsMatch(username, password)) return json(res, 401, { error: "Incorrect username or password." });
+      if (!credentialsMatch(username, password)) {
+        if (wantsHtml) return html(res, 401, "<!doctype html><title>Sign-in failed</title><p>Incorrect username or password.</p><p><a href=\"/\">Try again</a></p>");
+        return json(res, 401, { error: "Incorrect username or password." });
+      }
       const session = createSession(username);
-      if (!session) return json(res, 503, { error: "Portal session signing is not configured." });
+      if (!session) {
+        if (wantsHtml) return html(res, 503, "<!doctype html><title>Portal login unavailable</title><p>Portal session signing is not configured.</p><p><a href=\"/\">Back to portal</a></p>");
+        return json(res, 503, { error: "Portal session signing is not configured." });
+      }
+      if (wantsHtml) {
+        res.writeHead(303, { Location: "/", "Set-Cookie": sessionCookie(session, true), "Cache-Control": "no-store" });
+        return res.end();
+      }
       return json(res, 200, { ok: true, authenticated: true, username }, { "Set-Cookie": sessionCookie(session, true) });
     } catch (error) {
       return json(res, 400, { error: error.message });
