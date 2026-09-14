@@ -56,6 +56,7 @@ const {
   updateJob
 } = require("./airtable");
 const { portalPage } = require("./portal");
+const { parseManualIntake } = require("./manual-intake");
 const {
   createAirtableIntakeRecord,
   intakeAuthorized,
@@ -1803,6 +1804,48 @@ async function route(req, res) {
       return json(res, 200, { ok: true, readOnly: false, jobs });
     } catch (error) {
       return json(res, 502, { error: "Jobs could not be loaded", detail: error.message });
+    }
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/portal/intake") {
+    if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+    try {
+      const body = await readJsonBody(req);
+      const parsed = parseManualIntake(body && body.text, { photoUrl: body && body.photoUrl });
+      if (!parsed.ok) return json(res, parsed.needsAddress ? 422 : 400, parsed);
+
+      // Match a single existing job at this address before creating anything.
+      // This keeps a pasted text thread from creating a second Airtable job.
+      const records = await listJobs({ maxRecords: 500 });
+      const addressKey = normalizeAddress(parsed.propertyAddress);
+      const addressMatches = records.filter((record) => normalizeAddress(record && record.fields && (record.fields["Property Address"] || record.fields.Address)) === addressKey);
+      const exactIdMatch = records.find((record) => clean(record && record.fields && record.fields["Job ID"]) === parsed.jobId);
+      const existing = exactIdMatch || (addressMatches.length === 1 ? addressMatches[0] : null);
+      if (existing && existing.id) {
+        const current = existing.fields || {};
+        const patch = Object.fromEntries(Object.entries(parsed.fields)
+          .filter(([field, value]) => value !== "" && Object.prototype.hasOwnProperty.call(current, field) && !clean(current[field])));
+        if (Object.prototype.hasOwnProperty.call(current, "Source Channels")) {
+          patch["Source Channels"] = [...new Set(`${clean(current["Source Channels"])},manual portal`.split(",").map(clean).filter(Boolean))].join(", ");
+        }
+        if (Object.keys(patch).length) await updateJob(existing.id, patch);
+        return json(res, 200, {
+          ok: true, action: "matched", duplicate: true, recordId: existing.id,
+          propertyAddress: parsed.propertyAddress, links: parsed.links,
+          message: "Matched the existing Airtable job; no duplicate was created."
+        });
+      }
+
+      const created = await createAirtableIntakeRecord({ fields: parsed.fields });
+      return json(res, created.duplicate ? 200 : 201, {
+        ok: true, action: created.duplicate ? "matched" : "created", duplicate: created.duplicate,
+        recordId: created.record && created.record.id, propertyAddress: parsed.propertyAddress,
+        links: parsed.links, omittedFields: created.omittedFields || [],
+        message: created.duplicate ? "Matched an existing Airtable job; no duplicate was created." : "Created a new Airtable job for review."
+      });
+    } catch (error) {
+      console.error("Manual portal intake failed", error.message);
+      return json(res, 502, { error: "Manual intake could not be saved", detail: error.message });
     }
   }
 
