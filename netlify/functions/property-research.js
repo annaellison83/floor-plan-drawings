@@ -97,8 +97,10 @@ function buildCamsQueryUrl(address) {
 
 async function fetchJson(url, options = {}) {
   const requestOptions = { ...options };
+  const timeoutMs = Number(requestOptions.timeoutMs);
+  delete requestOptions.timeoutMs;
   if (!requestOptions.signal && typeof AbortSignal !== "undefined" && AbortSignal.timeout) {
-    requestOptions.signal = AbortSignal.timeout(8000);
+    requestOptions.signal = AbortSignal.timeout(Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 8000);
   }
 
   const response = await fetch(url, requestOptions);
@@ -474,8 +476,11 @@ async function lookupZimas(x, y) {
   );
 
   const [landbaseResult, zoningResult] = await Promise.all([
-    fetchJson(landbaseUrl),
-    fetchJson(zoningUrl)
+    // ZIMAS can take 10–15 seconds to project a WGS84 point and search the
+    // parcel layer. Keep the normal API timeout short, but give this lookup
+    // enough room to return a real PIN instead of silently showing “unavailable”.
+    fetchJson(landbaseUrl, { timeoutMs: 20000 }),
+    fetchJson(zoningUrl, { timeoutMs: 20000 })
   ]);
   const parcels = (landbaseResult.features || []).map((feature) => feature.attributes || {});
   const zones = (zoningResult.features || []).map((feature) => feature.attributes || {});
