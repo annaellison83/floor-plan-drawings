@@ -21,6 +21,10 @@ function safeUrl(value) {
 
   try {
     const url = new URL(candidate);
+    // ArcGIS PrintingTools output URLs are temporary job artifacts. They
+    // often remain in Airtable after the artifact has expired, so never emit
+    // them directly as email image sources.
+    if (url.hostname === "utility.arcgisonline.com" && url.pathname.includes("/arcgisoutput/")) return "";
     return url.protocol === "https:" ? url.href : "";
   } catch {
     return "";
@@ -47,10 +51,14 @@ function detail(label, value) {
   return `<td class="detail-cell" width="50%" valign="top"><div class="detail"><div class="eyebrow">${escapeHtml(label)}</div><div class="detail-value">${escapeHtml(value)}</div></div></td>`;
 }
 
-function imageCard(number, label, imageUrl, linkUrl) {
+function imageCard(number, label, imageUrl, linkUrl, fallbackUrl) {
   const image = safeUrl(imageUrl);
   const link = safeUrl(linkUrl || imageUrl);
-  if (!image) return "";
+  if (!image) {
+    const fallback = safeUrl(fallbackUrl || linkUrl);
+    if (!fallback) return "";
+    return `<tr><td class="image-wrap"><div class="eyebrow image-label">${escapeHtml(number)} &nbsp; ${escapeHtml(label)}</div><div class="image-fallback" style="padding:22px;background:#e3eadf;border:1px solid #cbd7c5;border-radius:14px;text-align:center;"><span style="display:block;color:#53635c;font-size:14px;line-height:21px;margin-bottom:10px;">Preview unavailable</span><a href="${escapeHtml(fallback)}" style="color:#0b57d0;font-weight:700;text-decoration:underline;">Open aerial view</a></div></td></tr>`;
+  }
 
   const imageTag = `<img src="${escapeHtml(image)}" alt="${escapeHtml(label)}" width="100%" style="display:block;width:100%;max-width:100%;height:auto;margin:0 auto;border:0;border-radius:14px;">`;
   const content = link ? `<a href="${escapeHtml(link)}" style="display:block;width:100%;text-decoration:none;">${imageTag}</a>` : imageTag;
@@ -75,7 +83,11 @@ function quoteReadyEmail(job) {
   const recordUrl = safeUrl(job.recordUrl);
   const approvalUrl = safeUrl(job.approvalUrl);
   const availabilityReviewUrl = safeUrl(job.availabilityReviewUrl);
-  const mapUrl = safeUrl(job.mapUrl);
+  const mapUrl = safeUrl(job.emailAerialUrl || job.aerialAttachmentUrl || job.mapUrl);
+  // Keep the inline image source limited to a preflighted cache URL or a
+  // currently-live Airtable attachment. A stale ArcGIS URL must never reach
+  // the email client as an <img> source.
+  job = { ...job, mapUrl: mapUrl || "", aerialAttachmentUrl: mapUrl || "" };
   const contextMapUrl = safeUrl(job.contextMapUrl);
   const subject = `QUOTE READY | ${address}`;
 
@@ -229,6 +241,8 @@ function newRequestEmail(job) {
   const availabilityReviewUrl = safeUrl(job.availabilityReviewUrl);
   const details = [job.service, job.scope, job.tourRequested && `3D tour: ${job.tourRequested}`].filter(Boolean).join("\n");
   const contact = [job.clientEmail, job.clientPhone].filter(Boolean).join(" · ");
+  const emailAerialUrl = safeUrl(job.emailAerialUrl || job.aerialAttachmentUrl || job.mapUrl);
+  job = { ...job, mapUrl: emailAerialUrl || "" };
   const imageRows = `${imageCard("01", "Property close-up", job.mapUrl, job.mapUrl)}${imageCard("02", "Greater LA context", job.contextMapUrl, job.contextMapUrl)}`;
   const availabilityPanel = availabilityReviewUrl
     ? `<div class="availability"><div class="eyebrow">Optional appointment availability</div><div class="muted" style="margin-top:8px;">Review the live employee calendars and send the client up to three recommended appointment times. No calendar event is created by this step.</div><div class="button-wrap"><a class="button" href="${escapeHtml(availabilityReviewUrl)}">Check availability &amp; send options</a></div></div>`

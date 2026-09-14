@@ -1,5 +1,6 @@
 const http = require("node:http");
 const crypto = require("node:crypto");
+const fs = require("node:fs");
 const {
   createProvisionalHold,
   discoverCalendars,
@@ -17,6 +18,7 @@ const { projectState, recipientsFor } = require("./project-state");
 const { createGmailClient, isGmailConfigured, isLikelyFloorPlanIntake, parseGmailMessage, processIntakeMessages } = require("./gmail-runtime");
 const { findGmailAirtableMatch, gmailAirtableFields, patchMissingGmailFields } = require("./gmail-airtable-sync");
 const { translateClientNotes } = require("./note-translation");
+const { prepareEmailAssets, readAsset } = require("./image-assets");
 const {
   clientQuoteEmail,
   clientAvailabilityProposalEmail,
@@ -1185,7 +1187,7 @@ async function deliverQuoteReady(recordId) {
     const project = syncProjectState(job);
     const internalTo = [clean(process.env.SMTP_USER)];
     if (!internalTo[0]) throw new Error("SMTP_USER is not configured");
-    const email = quoteReadyEmail(job);
+    const email = quoteReadyEmail(await prepareEmailAssets(job));
     if (shadowEnabled("QUOTE_READY")) {
       return { ok: true, shadow: true, status: 200, recordId, subject: email.subject, delivery: "not-sent" };
     }
@@ -1714,6 +1716,17 @@ async function route(req, res) {
   // The dedicated master subdomain should open the portal directly, while
   // the Render service URL root remains a lightweight health/status response.
   const host = String(req.headers.host || "").split(":")[0].toLowerCase();
+  const assetMatch = url.pathname.match(/^\/assets\/email\/(aerial-[a-f0-9]{64}\.jpg)$/);
+  if (req.method === "GET" && assetMatch) {
+    const filePath = readAsset(assetMatch[1]);
+    if (!filePath) return json(res, 404, { error: "Asset not found" });
+    res.writeHead(200, {
+      "Content-Type": "image/jpeg",
+      "Cache-Control": "public, max-age=31536000, immutable",
+      "X-Content-Type-Options": "nosniff"
+    });
+    return fs.createReadStream(filePath).pipe(res);
+  }
   if (req.method === "GET" && url.pathname === "/" && host === "master.floorplandrawings.com") {
     return html(res, 200, portalPage());
   }
@@ -2337,7 +2350,7 @@ async function route(req, res) {
 
     try {
       const sampleJob = await buildTestQuote();
-      const sample = quoteReadyEmail(sampleJob);
+      const sample = quoteReadyEmail(await prepareEmailAssets(sampleJob));
       const delivery = await sendMail({
         to: recipient,
         subject: `[TEST — NO WORKFLOW] ${sample.subject}`,
@@ -2423,7 +2436,7 @@ async function route(req, res) {
     try {
       const sampleJob = await buildTestQuote();
       const reviewUrl = appointmentReviewUrl("test-board", "test", weekStartDate(localDate()));
-      const sample = quoteReadyEmail({ ...sampleJob, availabilityReviewUrl: reviewUrl });
+      const sample = quoteReadyEmail(await prepareEmailAssets({ ...sampleJob, availabilityReviewUrl: reviewUrl }));
       const delivery = await sendMail({
         to: recipient,
         subject: `[TEST — NO WORKFLOW] ${sample.subject}`,

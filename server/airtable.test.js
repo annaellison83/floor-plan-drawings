@@ -52,6 +52,17 @@ test("supports field-name fallbacks", () => {
   assert.equal(job.approxSqFt, 1200);
 });
 
+test("maps an Airtable aerial attachment for durable email caching", () => {
+  const job = mapJob({ id: "recABC123", fields: {
+    "Property Address": "123 Main St",
+    "Aerial Parcel Preview": [{
+      url: "https://v5.airtableusercontent.com/attachment.jpg",
+      thumbnails: { full: { url: "https://v5.airtableusercontent.com/attachment-full.jpg" } }
+    }]
+  }});
+  assert.equal(job.aerialAttachmentUrl, "https://v5.airtableusercontent.com/attachment.jpg");
+});
+
 test("builds a deterministic idempotency key and communication log payload", () => {
   assert.equal(
     communicationKey("rec08dRgUXUMPajMt", "QUOTE READY"),

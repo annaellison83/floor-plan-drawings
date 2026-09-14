@@ -17,6 +17,12 @@ function yesNo(value) {
   return clean(value) || "No";
 }
 
+function attachmentUrl(value) {
+  if (!Array.isArray(value)) return "";
+  const attachment = value.find((item) => item && (item.url || (item.thumbnails && item.thumbnails.full && item.thumbnails.full.url)));
+  return clean(attachment && (attachment.url || (attachment.thumbnails && attachment.thumbnails.full && attachment.thumbnails.full.url)));
+}
+
 function mapJob(record, options = {}) {
   const fields = record && record.fields ? record.fields : {};
   const baseId = clean(options.baseId);
@@ -71,6 +77,7 @@ function mapJob(record, options = {}) {
     propertyCheckStatus: first(fields, ["Property Check Status"]),
     propertyResearchComplete: first(fields, ["Property Research Complete"]),
     tourRequested: yesNo(first(fields, ["3D Tour Requested", "3D Tour"])),
+    aerialAttachmentUrl: attachmentUrl(first(fields, ["Aerial Parcel Preview"])),
     mapUrl: first(fields, ["Aerial Map URL", "Aerial URL"]),
     googleMapsLink: first(fields, ["Google Maps Link", "Google Maps URL"]),
     zimasLink: first(fields, ["ZIMAS Link"]),
