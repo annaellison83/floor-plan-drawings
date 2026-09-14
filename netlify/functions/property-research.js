@@ -749,6 +749,7 @@ function buildUpdateFields(research, existingFields) {
       ? research.sourceUrl || ""
       : buildGoogleMapsSearchUrl(research.address || existingFields["Property Address"]),
     "Quote Calculation Notes": [currentNotes, note].filter(Boolean).join("\n\n"),
+    "Google Maps Link": buildGoogleMapsSearchUrl(searchAddress),
     "Google Sq Ft Search URL": buildGoogleSqFtSearchUrl(searchAddress),
     "Property Research Complete": true
   };
@@ -808,6 +809,7 @@ function buildUpdateFields(research, existingFields) {
         : "LA County Assessor public record"
       : "No online building square footage found",
     "Aerial Map URL": candidate.aerialUrl,
+    "Satellite Photo Link": candidate.aerialUrl,
     "Aerial Parcel Preview": candidate.aerialUrl ? [{
       url: candidate.aerialUrl,
       filename: `aerial-${aerialFilename}.jpg`

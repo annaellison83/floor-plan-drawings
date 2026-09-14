@@ -22,6 +22,11 @@ function clean(value) {
   return String(value).trim();
 }
 
+function buildGoogleMapsSearchUrl(address) {
+  const value = clean(address);
+  return value ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(value)}` : "";
+}
+
 function cleanEnv(value) {
   return clean(value).replace(/^=\s*/, "").trim();
 }
@@ -201,6 +206,7 @@ function buildAirtableFields(data) {
     "Client Phone": clean(data.phone),
     "Client Email": clean(data.email),
     "Property Address": city ? `${address}, ${city}` : address,
+    "Google Maps Link": buildGoogleMapsSearchUrl(city ? `${address}, ${city}` : address),
     City: city,
     State: city || address ? "CA" : "",
     "Approx Sq Ft": parseSquareFeet(data.approxSqFt),

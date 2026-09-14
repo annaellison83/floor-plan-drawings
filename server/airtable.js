@@ -65,6 +65,8 @@ function mapJob(record, options = {}) {
     propertyResearchComplete: first(fields, ["Property Research Complete"]),
     tourRequested: yesNo(first(fields, ["3D Tour Requested", "3D Tour"])),
     mapUrl: first(fields, ["Aerial Map URL", "Aerial URL"]),
+    googleMapsLink: first(fields, ["Google Maps Link", "Google Maps URL"]),
+    satellitePhotoLink: first(fields, ["Satellite Photo Link", "Aerial Map URL", "Aerial URL"]),
     contextMapUrl: first(fields, ["LA Context Map URL", "Context Map URL"]),
     recordUrl: baseId && tableId && record.id
       ? `https://airtable.com/${encodeURIComponent(baseId)}/${encodeURIComponent(tableId)}/${encodeURIComponent(record.id)}`

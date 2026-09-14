@@ -4,6 +4,11 @@ function clean(value) {
   return value === undefined || value === null ? "" : String(value).trim();
 }
 
+function googleMapsLink(address) {
+  const value = clean(address);
+  return value ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(value)}` : "";
+}
+
 function normalizeText(value) {
   return clean(value).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
@@ -77,6 +82,7 @@ function calendarAirtableFields(calendar, event, project = null, gmailMatch = nu
   return {
     "Job ID": jobIdForCalendarEvent(calendar, event),
     "Property Address": address,
+    "Google Maps Link": googleMapsLink(address),
     "Client Name": project && project.clientName || gmailMatch && gmailMatch.clientName || "",
     "Client Email": projectClientEmail || gmailClient && gmailClient.email || "",
     "Status": "Calendar Imported",
