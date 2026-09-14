@@ -1736,6 +1736,29 @@ async function route(req, res) {
     });
     return fs.createReadStream(filePath).pipe(res);
   }
+  if (req.method === "GET" && url.pathname === "/assets/property-zimas") {
+    const address = clean(url.searchParams.get("address"));
+    if (!address) return json(res, 400, { error: "Address is required" });
+    try {
+      const endpoint = clean(process.env.PROPERTY_RESEARCH_URL)
+        || "https://floorplandrawings.com/.netlify/functions/property-research";
+      const requestUrl = new URL(endpoint);
+      requestUrl.searchParams.set("address", address);
+      const response = await fetch(requestUrl.href, { headers: { Accept: "application/json" } });
+      const body = await response.json().catch(() => ({}));
+      const pin = clean(body && body.research && body.research.zimas
+        && body.research.zimas.parcel && body.research.zimas.parcel.pin);
+      if (!response.ok || !pin) return json(res, 404, { error: "ZIMAS parcel unavailable" });
+      res.writeHead(302, {
+        Location: `https://zimas.lacity.org/zimas-classic/ProjectDataTab?pin=${encodeURIComponent(pin)}`,
+        "Cache-Control": "public, max-age=3600"
+      });
+      return res.end();
+    } catch (error) {
+      console.warn("Portal ZIMAS link failed", error.message);
+      return json(res, 502, { error: "ZIMAS parcel unavailable" });
+    }
+  }
   if (req.method === "GET" && url.pathname === "/assets/property-aerial") {
     const address = clean(url.searchParams.get("address"));
     if (!address) return json(res, 400, { error: "Address is required" });
