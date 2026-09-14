@@ -1,6 +1,7 @@
 const AIRTABLE_API_URL = "https://api.airtable.com/v0";
 const crypto = require("crypto");
 const { researchAddress, buildUpdateFields } = require("./property-research");
+const { ensurePropertyLinks } = require("../../server/property-links");
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -197,7 +198,7 @@ function buildAirtableFields(data) {
   const missing = missingInfo(data, workflow);
   const complexityFlags = airtableComplexityFlags(data);
 
-  const fields = {
+  const fields = ensurePropertyLinks({
     "Job ID": `WEB-${Date.now()}`,
     Status: status,
     "Website Workflow": workflow,
@@ -206,7 +207,6 @@ function buildAirtableFields(data) {
     "Client Phone": clean(data.phone),
     "Client Email": clean(data.email),
     "Property Address": city ? `${address}, ${city}` : address,
-    "Google Maps Link": buildGoogleMapsSearchUrl(city ? `${address}, ${city}` : address),
     City: city,
     State: city || address ? "CA" : "",
     "Approx Sq Ft": parseSquareFeet(data.approxSqFt),
@@ -257,7 +257,7 @@ function buildAirtableFields(data) {
       `Source: Website ${workflow}`,
       clean(data.notes) && `Client notes: ${clean(data.notes)}`
     ])
-  };
+  }, city ? `${address}, ${city}` : address);
 
   return fields;
 }

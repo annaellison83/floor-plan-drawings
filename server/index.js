@@ -48,10 +48,12 @@ const {
   listPropertyReviewCandidates,
   listQuoteReadyCandidates,
   listJobs,
+  mapJob,
   communicationKey,
   updateCommunicationLog,
   updateJob
 } = require("./airtable");
+const { portalPage } = require("./portal");
 const {
   createAirtableIntakeRecord,
   intakeAuthorized,
@@ -1715,6 +1717,56 @@ async function route(req, res) {
       status: "ok",
       health: "/healthz"
     });
+  }
+
+  if (req.method === "GET" && (url.pathname === "/master" || url.pathname === "/master/")) {
+    return html(res, 200, portalPage());
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/portal/jobs") {
+    if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+    try {
+      const settings = { ...require("./airtable").config() };
+      const records = await listJobs({ maxRecords: url.searchParams.get("limit") || 250 });
+      const jobs = records.map((record) => mapJob(record, {
+        baseId: settings.baseId,
+        tableId: settings.jobsTableId || settings.jobsTable,
+        approvalBaseUrl: settings.approvalBaseUrl,
+        proposalReviewBaseUrl: settings.proposalReviewBaseUrl
+      }));
+      return json(res, 200, { ok: true, readOnly: false, jobs });
+    } catch (error) {
+      return json(res, 502, { error: "Jobs could not be loaded", detail: error.message });
+    }
+  }
+
+  const portalJobMatch = url.pathname.match(/^\/api\/portal\/jobs\/([^/]+)$/);
+  if (req.method === "PATCH" && portalJobMatch) {
+    if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+    try {
+      const recordId = decodeURIComponent(portalJobMatch[1]);
+      const body = await readJsonBody(req);
+      const requested = body && body.fields && typeof body.fields === "object" ? body.fields : {};
+      const allowedFields = [
+        "Client Name",
+        "Status",
+        "Assigned Measurer",
+        "Approx Sq Ft",
+        "Verified Sq Ft",
+        "Appointment Date/Time",
+        "Delivery Date",
+        "Access Info"
+      ];
+      const fields = Object.fromEntries(allowedFields
+        .filter((field) => Object.prototype.hasOwnProperty.call(requested, field))
+        .map((field) => [field, requested[field] === "" ? null : requested[field]]));
+      if (!Object.keys(fields).length) return json(res, 400, { error: "No editable fields supplied" });
+      await updateJob(recordId, fields);
+      const updated = await getJob(recordId);
+      return json(res, 200, { ok: true, job: updated, message: "Job saved" });
+    } catch (error) {
+      return json(res, 400, { error: "Job could not be saved", detail: error.message });
+    }
   }
 
   if (req.method === "GET" && url.pathname === "/api/email/test-scheduling-preview") {

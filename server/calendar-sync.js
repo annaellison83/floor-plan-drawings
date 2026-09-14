@@ -1,4 +1,5 @@
 const crypto = require("node:crypto");
+const { ensurePropertyLinks } = require("./property-links");
 
 function clean(value) {
   return value === undefined || value === null ? "" : String(value).trim();
@@ -79,10 +80,9 @@ function calendarAirtableFields(calendar, event, project = null, gmailMatch = nu
   const projectClient = project && project.contacts && project.contacts.client;
   const projectClientEmail = Array.isArray(projectClient) ? projectClient[0] : projectClient;
   const gmailClient = gmailMatch && gmailMatch.contacts && gmailMatch.contacts.client && gmailMatch.contacts.client[0];
-  return {
+  return ensurePropertyLinks({
     "Job ID": jobIdForCalendarEvent(calendar, event),
     "Property Address": address,
-    "Google Maps Link": googleMapsLink(address),
     "Client Name": project && project.clientName || gmailMatch && gmailMatch.clientName || "",
     "Client Email": projectClientEmail || gmailClient && gmailClient.email || "",
     "Status": "Calendar Imported",
@@ -100,7 +100,7 @@ function calendarAirtableFields(calendar, event, project = null, gmailMatch = nu
     "Normalized Property Key": normalizeAddress(address),
     "Source Channels": "calendar",
     "Calendar Sync Key": calendarEventKey(calendar, event)
-  };
+  }, address);
 }
 
 module.exports = { calendarAirtableFields, calendarEventKey, extractAddress, findProjectMatch, isLikelyWorkEvent, jobIdForCalendarEvent, normalizeAddress };

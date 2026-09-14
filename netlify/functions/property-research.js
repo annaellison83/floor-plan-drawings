@@ -1,5 +1,6 @@
 const AIRTABLE_API_URL = "https://api.airtable.com/v0";
 const { resolveQuoteZone } = require("../../server/quote-zone");
+const { ensurePropertyLinks } = require("../../server/property-links");
 const CAMS_QUERY_URL = "https://arcgis.gis.lacounty.gov/arcgis/rest/services/LACounty_Dynamic/CAMS/MapServer/1/query";
 const AERIAL_EXPORT_URL = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export";
 const GOOGLE_STATIC_MAP_URL = "https://maps.googleapis.com/maps/api/staticmap";
@@ -742,17 +743,16 @@ function buildUpdateFields(research, existingFields) {
   const searchAddress = research.candidate && research.candidate.fullAddress
     ? research.candidate.fullAddress
     : research.address || existingFields["Property Address"];
-  const baseFields = {
+  const baseFields = ensurePropertyLinks({
     "Property Check Status": research.status,
     // Keep raw GIS query endpoints internal; they open as JSON/code in a browser.
     "Property Data Source URL": research.ok
       ? research.sourceUrl || ""
       : buildGoogleMapsSearchUrl(research.address || existingFields["Property Address"]),
     "Quote Calculation Notes": [currentNotes, note].filter(Boolean).join("\n\n"),
-    "Google Maps Link": buildGoogleMapsSearchUrl(searchAddress),
     "Google Sq Ft Search URL": buildGoogleSqFtSearchUrl(searchAddress),
     "Property Research Complete": true
-  };
+  }, searchAddress);
 
   if (!research.ok) {
     return {
@@ -797,7 +797,7 @@ function buildUpdateFields(research, existingFields) {
     .slice(0, 80) || "property";
   const contextMapFilename = `la-context-${aerialFilename}.jpg`;
   const propertyStatus = hasParcel && !needsUnitReview ? "Matched" : "Possible Match";
-  return {
+  return ensurePropertyLinks({
     ...baseFields,
     APN: candidate.ain,
     PIN: hasParcel ? zimas.parcel.pin : "",
@@ -831,7 +831,7 @@ function buildUpdateFields(research, existingFields) {
     "Property Check Status": propertyStatus,
     "LA City Match Status": hasParcel ? "Matched" : research.laCityMatch,
     "Complexity Flags": addFlags(existingFields["Complexity Flags"], [])
-  };
+  }, candidate.fullAddress || research.address);
 }
 
 async function getAirtableRecord(baseId, tableName, recordId, token) {

@@ -1,5 +1,6 @@
 const crypto = require("node:crypto");
 const { normalizeAddress } = require("./calendar-sync");
+const { ensurePropertyLinks } = require("./property-links");
 
 function clean(value) {
   return value === undefined || value === null ? "" : String(value).trim();
@@ -74,7 +75,7 @@ function gmailAirtableFields(message = {}, project = {}, existing = null) {
   const body = clean(message.text);
   const subject = clean(message.subject);
   const originalRequest = [subject ? `Subject: ${subject}` : "", body].filter(Boolean).join("\n\n").slice(0, 12000);
-  const fields = {
+  const fields = ensurePropertyLinks({
     "Job ID": gmailJobId(threadId, address),
     "Status": "New Request",
     "Property Address": address,
@@ -86,7 +87,7 @@ function gmailAirtableFields(message = {}, project = {}, existing = null) {
     "Gmail Message ID": messageId,
     "Normalized Property Key": addressKey,
     "Source Channels": mergedSourceChannels(existing, "gmail")
-  };
+  }, address);
   if (client) {
     fields["Client Name"] = contactName(client) || clean(project.clientName);
     fields["Client Email"] = contactEmail(client);

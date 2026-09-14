@@ -59,6 +59,10 @@ function mapJob(record, options = {}) {
     quoteNotes: first(fields, ["Quote Calculation Notes", "Quote Notes"]),
     followUpDate: first(fields, ["Follow-Up Date", "Follow Up Date"]),
     quoteSentDate: first(fields, ["Quote Sent Date"]),
+    appointmentDateTime: first(fields, ["Appointment Date/Time", "Appointment Start", "Appointment Date"]),
+    appointmentStart: first(fields, ["Appointment Start", "Appointment Date/Time"]),
+    deliveryDate: first(fields, ["Delivery Date", "Drawing Due Date"]),
+    accessInfo: first(fields, ["Access Info", "Access Details"]),
     clientResponse: first(fields, ["Client Response"]),
     annaEmailStatus: first(fields, ["Anna Email Status"]),
     propertyCheckStatus: first(fields, ["Property Check Status"]),
@@ -66,6 +70,7 @@ function mapJob(record, options = {}) {
     tourRequested: yesNo(first(fields, ["3D Tour Requested", "3D Tour"])),
     mapUrl: first(fields, ["Aerial Map URL", "Aerial URL"]),
     googleMapsLink: first(fields, ["Google Maps Link", "Google Maps URL"]),
+    zimasLink: first(fields, ["ZIMAS Link"]),
     satellitePhotoLink: first(fields, ["Satellite Photo Link", "Aerial Map URL", "Aerial URL"]),
     contextMapUrl: first(fields, ["LA Context Map URL", "Context Map URL"]),
     recordUrl: baseId && tableId && record.id
