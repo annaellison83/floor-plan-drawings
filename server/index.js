@@ -1711,6 +1711,13 @@ function testSchedulingPreviewJob() {
 async function route(req, res) {
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
 
+  // The dedicated master subdomain should open the portal directly, while
+  // the Render service URL root remains a lightweight health/status response.
+  const host = String(req.headers.host || "").split(":")[0].toLowerCase();
+  if (req.method === "GET" && url.pathname === "/" && host === "master.floorplandrawings.com") {
+    return html(res, 200, portalPage());
+  }
+
   if (req.method === "GET" && url.pathname === "/") {
     return json(res, 200, {
       service: SERVICE_NAME,
