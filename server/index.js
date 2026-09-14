@@ -1727,7 +1727,7 @@ async function route(req, res) {
     if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
     try {
       const settings = { ...require("./airtable").config() };
-      const records = await listJobs({ maxRecords: url.searchParams.get("limit") || 250 });
+      const records = await listJobs({ maxRecords: url.searchParams.get("limit") || 250, newestFirst: true });
       const jobs = records.map((record) => mapJob(record, {
         baseId: settings.baseId,
         tableId: settings.jobsTableId || settings.jobsTable,

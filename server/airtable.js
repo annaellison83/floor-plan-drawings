@@ -45,6 +45,9 @@ function mapJob(record, options = {}) {
     scope: first(fields, ["Scope", "Unit / Suite / Scope Detail"]),
     workflow: first(fields, ["Website Workflow", "Workflow", "Request Type"]) || "Quick Quote",
     status: first(fields, ["Status"]),
+    assignedMeasurer: first(fields, ["Assigned Measurer", "Employee Assigned", "Employee", "Measurer"]),
+    // Keep this explicit: the portal must not silently substitute record creation time.
+    dateStarted: first(fields, ["Request Started Date", "Date Started", "Start Date", "Submitted At"]),
     quoteZone: first(fields, ["Quote Zone", "Zone"]),
     milesFromNorthHollywood: first(fields, ["Miles From North Hollywood"]),
     milesFromMontereyPark: first(fields, ["Miles From Monterey Park"]),
@@ -261,6 +264,7 @@ async function listJobs(options = {}) {
   const records = [];
   let offset = "";
   const maxRecords = Math.max(1, Math.min(500, Number(options.maxRecords) || 500));
+  const fetchLimit = options.newestFirst ? 500 : maxRecords;
   do {
     const url = new URL(`${AIRTABLE_API}/${encodeURIComponent(settings.baseId)}/${encodeURIComponent(table)}`);
     url.searchParams.set("pageSize", "100");
@@ -268,7 +272,19 @@ async function listJobs(options = {}) {
     const body = await airtableJson(url.href, { token: settings.token });
     records.push(...(body.records || []));
     offset = clean(body.offset);
-  } while (offset && records.length < maxRecords);
+  } while (offset && records.length < fetchLimit);
+  if (options.newestFirst) {
+    const dateValue = (record) => first(record && record.fields ? record.fields : {}, ["Request Started Date", "Date Started", "Start Date", "Submitted At"]);
+    records.sort((a, b) => {
+      const aValue = dateValue(a);
+      const bValue = dateValue(b);
+      if (!aValue && !bValue) return clean(a && a.id).localeCompare(clean(b && b.id));
+      if (!aValue) return 1;
+      if (!bValue) return -1;
+      const delta = new Date(bValue).getTime() - new Date(aValue).getTime();
+      return Number.isFinite(delta) && delta !== 0 ? delta : clean(a && a.id).localeCompare(clean(b && b.id));
+    });
+  }
   return records.slice(0, maxRecords);
 }
 
