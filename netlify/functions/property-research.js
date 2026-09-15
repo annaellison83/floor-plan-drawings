@@ -377,6 +377,13 @@ function buildGoogleSqFtSearchUrl(address) {
     : "";
 }
 
+function canonicalAddress(value) {
+  let text = clean(value).replace(/\s+/g, " ");
+  const zip = text.match(/\b(?:CA|California)\s+\d{5}(?:-\d{4})?/i);
+  if (zip) text = text.slice(0, zip.index + zip[0].length);
+  return text.replace(/[\s,]+$/, "").trim();
+}
+
 function buildAssessorPublicUrl(ain) {
   const value = clean(ain).replace(/[^0-9]/g, "");
   return value ? `${COUNTY_ASSESSOR_PORTAL_URL}/${value}` : "";
@@ -822,6 +829,7 @@ function buildUpdateFields(research, existingFields) {
   }
 
   const candidate = research.candidate;
+  const resolvedAddress = canonicalAddress(candidate.fullAddress || research.address);
   const zimas = research.zimas;
   const complexityText = [
     existingFields["Property Type"],
@@ -858,6 +866,7 @@ function buildUpdateFields(research, existingFields) {
   const propertyStatus = hasParcel && !needsUnitReview ? "Matched" : "Possible Match";
   return ensurePropertyLinks({
     ...baseFields,
+    "Property Address": resolvedAddress,
     APN: candidate.ain,
     PIN: hasParcel ? zimas.parcel.pin : "",
     "Lot Size": hasParcel && zimas.parcel.lotSizeSqFt !== null
@@ -890,7 +899,7 @@ function buildUpdateFields(research, existingFields) {
     "Property Check Status": propertyStatus,
     "LA City Match Status": hasParcel ? "Matched" : research.laCityMatch,
     "Complexity Flags": addFlags(existingFields["Complexity Flags"], [])
-  }, candidate.fullAddress || research.address);
+  }, resolvedAddress);
 }
 
 async function getAirtableRecord(baseId, tableName, recordId, token) {
