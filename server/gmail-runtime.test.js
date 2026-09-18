@@ -22,6 +22,8 @@ test("structured intake extraction handles floor plan and site map subjects", ()
   assert.equal(extractPropertyAddress("Floor Plan Request | 4111 Edgehill Drive | Ali Jack", ""), "4111 Edgehill Drive");
   assert.equal(extractClientName("Floor Plan Request | 4111 Edgehill Drive | Ali Jack", ""), "Ali Jack");
   assert.equal(extractPropertyAddress("317-321 Ocean Park Blvd & 2528 4th St - Site Map Requested", ""), "317-321 Ocean Park Blvd & 2528 4th St");
+  assert.equal(extractPropertyAddress("NEW JOB: 921 Thayer Avenue", ""), "921 Thayer Avenue");
+  assert.equal(extractPropertyAddress("Floor plan needed - 1624 Hillcrest Ave in Glendale", ""), "1624 Hillcrest Ave");
 });
 
 test("structured intake extraction removes inline map links from an address", () => {
@@ -35,6 +37,7 @@ test("parseGmailMessage preserves thread and reply metadata and decodes bodies",
 
 test("FPD auto-label heuristic requires a marker plus an address and rejects unrelated mail", () => {
   assert.equal(isLikelyFloorPlanIntake({ subject: "Floor Plan Request", text: "Please measure 4111 Edgehill Drive.", propertyAddress: "4111 Edgehill Drive" }), true);
+  assert.equal(isLikelyFloorPlanIntake({ subject: "NEW JOB: 921 Thayer Avenue", text: "Please let me know your next available date for this home to get measured.", propertyAddress: "921 Thayer Avenue" }), true);
   assert.equal(isLikelyFloorPlanIntake({ subject: "Appointment Confirmation", text: "Kaiser appointment at 4111 Edgehill Drive", propertyAddress: "4111 Edgehill Drive" }), false);
   assert.equal(isLikelyFloorPlanIntake({ subject: "Quick hello", text: "Can you do Tuesday?", propertyAddress: "4111 Edgehill Drive" }), false);
 });

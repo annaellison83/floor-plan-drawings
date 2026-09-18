@@ -106,6 +106,8 @@ function extractPropertyAddress(subject, text) {
   if (pipeParts.length >= 3 && looksLikeAddress(pipeParts[1])) return pipeParts[1];
   const dashAddress = headline.match(/^(.+?)\s+-\s+(?:site map|floor plan|property)\s+requested\b/i);
   if (dashAddress && clean(dashAddress[1])) return clean(dashAddress[1]);
+  const inlineAddress = headline.match(/\b\d{1,6}\s+[^\n|,]{1,90}?\b(?:street|st|avenue|ave|boulevard|blvd|drive|dr|road|rd|lane|ln|court|ct|place|pl|way|parkway|pkwy|circle|cir|terrace|ter|highway|hwy)\b(?:\s+(?:#|unit|suite|apt)\s*[A-Za-z0-9-]+)?/i);
+  if (inlineAddress && clean(inlineAddress[0])) return clean(inlineAddress[0]);
   const lines = clean(text).split(/\r?\n/)
     .map((line) => clean(line).replace(/<https?:\/\/[^>]+>/gi, "").replace(/https?:\/\/\S+/gi, "").trim())
     .filter(Boolean);
@@ -145,7 +147,7 @@ function parseGmailMessage(message, options = {}) {
   };
 }
 
-const FPD_INTAKE_MARKERS = /\b(?:floor\s*plans?|floorplans?|site\s*plans?|matterport|3d\s*(?:tour|scan)|sq\.?\s*ft|square\s*feet|quick\s*quote|quote\s*(?:request|ready)|new\s+request|measure(?:ment)?s?|fpd\s+website)\b/i;
+const FPD_INTAKE_MARKERS = /\b(?:floor\s*plans?|floorplans?|floor\s*plan\s*(?:inquiry|needed)|site\s*plans?|matterport|3d\s*(?:tour|scan)|sq\.?\s*ft|square\s*feet|quick\s*quote|quote\s*(?:request|ready)|new\s+(?:request|job)|measure(?:ment)?s?|fpd\s+website)\b/i;
 const FPD_NON_INTAKE_MARKERS = /\b(?:kaiser|medical|therapy|soul\s*tenders|stripe|payout|tax|sep\s+contribution|retirement|insurance)\b/i;
 
 function isLikelyFloorPlanIntake(message = {}) {

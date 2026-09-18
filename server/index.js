@@ -378,7 +378,7 @@ async function applyGmailIntakeLabel(client, match) {
   return { ok: true, threadId, messageCount: Math.min(ids.length, 100), labelId };
 }
 
-const DEFAULT_GMAIL_AUTO_LABEL_QUERY = 'newer_than:3d -in:spam -in:trash -label:"[FPD] Intake" {floorplan "floor plan" "site plan" "sq ft" "square feet" matterport "new request" "quick quote" measure listing}';
+const DEFAULT_GMAIL_AUTO_LABEL_QUERY = 'newer_than:3d -in:spam -in:trash -label:"[FPD] Intake" {floorplan "floor plan" "site plan" "sq ft" "square feet" matterport "new request" "new job" "quick quote" measure listing}';
 
 async function autoLabelGmailIntake(client) {
   const config = client && client.config;
@@ -393,7 +393,19 @@ async function autoLabelGmailIntake(client) {
     if (!id) continue;
     try {
       const raw = await client.getMessage(id);
-      const parsed = parseGmailMessage(raw, { agentEmails: config.agentEmails, clientEmails: config.clientEmails });
+      let parsed = parseGmailMessage(raw, { agentEmails: config.agentEmails, clientEmails: config.clientEmails });
+      if (!isLikelyFloorPlanIntake(parsed) && typeof client.getThread === "function" && parsed.threadId) {
+        const thread = await client.getThread(parsed.threadId);
+        const threadMessages = (thread && thread.messages || []).map((message) => parseGmailMessage(message, { agentEmails: config.agentEmails, clientEmails: config.clientEmails }));
+        const addressMessage = threadMessages.find((message) => clean(message.propertyAddress));
+        parsed = {
+          ...parsed,
+          propertyAddress: parsed.propertyAddress || (addressMessage && addressMessage.propertyAddress) || "",
+          text: threadMessages.map((message) => message.text).filter(Boolean).join("\n\n"),
+          subject: threadMessages.map((message) => message.subject).filter(Boolean).join(" | "),
+          attachmentNames: [...new Set(threadMessages.flatMap((message) => message.attachmentNames || []))]
+        };
+      }
       if (!isLikelyFloorPlanIntake(parsed)) { skipped.push({ id, reason: "Heuristic did not meet address + FPD marker threshold" }); continue; }
       const threadId = clean(parsed.threadId || item.threadId);
       if (!threadId || seenThreads.has(threadId)) continue;
