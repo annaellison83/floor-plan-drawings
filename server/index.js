@@ -56,6 +56,7 @@ const {
   updateJob
 } = require("./airtable");
 const { portalPage } = require("./portal");
+const { privacyPage, termsPage } = require("./legal-pages");
 const { parseManualIntake } = require("./manual-intake");
 const {
   createAirtableIntakeRecord,
@@ -1792,6 +1793,14 @@ async function route(req, res) {
   }
   if (req.method === "GET" && url.pathname === "/" && host === "master.floorplandrawings.com") {
     return html(res, 200, portalPage());
+  }
+
+  if (req.method === "GET" && url.pathname === "/privacy") {
+    return html(res, 200, privacyPage());
+  }
+
+  if (req.method === "GET" && url.pathname === "/terms") {
+    return html(res, 200, termsPage());
   }
 
   if (req.method === "GET" && url.pathname === "/") {
