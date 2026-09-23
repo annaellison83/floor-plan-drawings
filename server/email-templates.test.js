@@ -36,9 +36,36 @@ test("client quote email contains one approved amount and escapes client data", 
 
 test("role clarification email stays internal and asks for an explicit role", () => {
   const email = roleClarificationEmail({ propertyAddress: "123 Main St", contacts: [{ name: "Conrad", email: "conrad@example.com" }] });
-  assert.match(email.subject, /^ROLE CLARIFICATION \|/);
+  assert.match(email.subject, /^ACTION NEEDED \| Clarify contact roles \|/);
   assert.match(email.html, /CLIENT/);
   assert.match(email.html, /conrad@example.com/);
+  assert.match(email.html, /INTERNAL ONLY/);
+  assert.match(email.text, /NAME — CLIENT, AGENT, or INTERNAL/);
+});
+
+test("internal quote emails provide a clean client draft without changing native Reply", () => {
+  const email = quoteReadyEmail({
+    propertyAddress: "123 Main St",
+    clientName: "Alex",
+    clientEmail: "client@example.com",
+    service: "Color Interior + Exterior",
+    clientNotes: "Please include the detached garage.",
+    verifiedSqFt: 1343,
+    clientFacingQuote: 345,
+    quoteNotes: "Internal pricing note that must not be client-facing.",
+    suggestedQuote: 345
+  });
+  assert.equal(email.replyTo, undefined);
+  assert.match(email.clientReplyUrl, /^https:\/\/mail\.google\.com\/mail\/u\/0\/\?/);
+  assert.match(email.html, /Draft a clean client reply/);
+  assert.match(email.html, /does not quote this internal email/);
+  const draft = new URL(email.clientReplyUrl);
+  assert.equal(draft.searchParams.get("to"), "client@example.com");
+  assert.match(draft.searchParams.get("body"), /Property size: 1,343 sq ft/);
+  assert.match(draft.searchParams.get("body"), /Quote: \$345/);
+  assert.match(draft.searchParams.get("body"), /Please include the detached garage/);
+  assert.doesNotMatch(draft.searchParams.get("body"), /Internal pricing note|Suggested quote|Zone/);
+  assert.match(email.text, /Draft a clean client reply:/);
 });
 
 test("approved client quote can include appointment options", () => {
@@ -164,4 +191,52 @@ test("Gmail intake notification can link back to the source thread", () => {
   });
   assert.match(email.html, /Open Gmail thread/);
   assert.match(email.text, /Gmail thread:/);
+  assert.equal(email.replyTo, undefined);
+  assert.match(email.clientReplyUrl, /^https:\/\/mail\.google\.com\/mail\/u\/0\/\?/);
+  assert.match(email.html, /Draft a clean client reply/);
+});
+
+test("new requests and quote-ready emails share the canonical review canvas", () => {
+  const job = {
+    clientName: "Eric Greenburg",
+    clientEmail: "eric.greenburg@gmail.com",
+    propertyAddress: "4011 Scandia Way, Los Angeles, CA 90065",
+    service: "Color Interior + Exterior",
+    scope: "Full property floor plan",
+    quoteZone: "Zone 1",
+    verifiedSqFt: 1980,
+    suggestedQuote: 345,
+    propertyMapUrl: "https://www.google.com/maps/search/?api=1&query=4011",
+    zimasLink: "https://zimas.lacity.org/map.asp?address=4011",
+    mapUrl: "https://example.com/aerial.jpg",
+    contextMapUrl: "https://example.com/context.jpg",
+    recordUrl: "https://airtable.com/rec123"
+  };
+  const quote = quoteReadyEmail(job);
+  const request = newRequestEmail(job);
+  for (const email of [quote, request]) {
+    assert.match(email.html, /class="property-head"/);
+    assert.match(email.html, /Google Maps/);
+    assert.match(email.html, /ZIMAS/);
+    assert.match(email.html, /Property close-up/);
+    assert.match(email.html, /Greater LA context/);
+    assert.match(email.html, /max-width:1100px/);
+    assert.match(email.html, /@media only screen and \(max-width:640px\)/);
+  }
+  assert.match(quote.html, /QUOTE READY/);
+  assert.match(request.html, /NEW REQUEST/);
+  assert.equal(quote.html.replace(/QUOTE READY/g, "REVIEW").includes("NEW REQUEST"), false);
+  assert.match(request.html, /Eric Greenburg/);
+});
+
+test("canonical review email falls back to a working map link when aerial assets are unavailable", () => {
+  const { html } = quoteReadyEmail({
+    propertyAddress: "4011 Scandia Way, Los Angeles, CA 90065",
+    suggestedQuote: 345,
+    mapUrl: "https://utility.arcgisonline.com/arcgis/rest/directories/arcgisoutput/expired.jpg"
+  });
+  assert.doesNotMatch(html, /utility\.arcgisonline\.com\/arcgisoutput/);
+  assert.match(html, /Preview unavailable/);
+  assert.match(html, /Open aerial view/);
+  assert.match(html, /google\.com\/maps\/search/);
 });

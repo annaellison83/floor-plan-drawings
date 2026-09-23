@@ -6,6 +6,55 @@ function text(value, fallback = "—") {
   return cleaned || fallback;
 }
 
+function normalizedEmail(value) {
+  const candidate = text(value, "").toLowerCase();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(candidate) ? candidate : "";
+}
+
+function mailtoUrl(email, subject = "", body = "") {
+  const address = normalizedEmail(email);
+  if (!address) return "";
+  const params = new URLSearchParams();
+  if (subject) params.set("subject", subject);
+  if (body) params.set("body", body);
+  const query = params.toString() ? `?${params.toString()}` : "";
+  return `mailto:${address}${query}`;
+}
+
+function gmailComposeUrl(email, subject = "", body = "") {
+  const address = normalizedEmail(email);
+  if (!address) return "";
+  const params = new URLSearchParams({ view: "cm", fs: "1", to: address });
+  if (subject) params.set("su", subject);
+  if (body) params.set("body", body);
+  return `https://mail.google.com/mail/u/0/?${params.toString()}`;
+}
+
+function clientReplyPanel(email, subject, body) {
+  const address = normalizedEmail(email);
+  const href = gmailComposeUrl(address, subject, body) || mailtoUrl(address, subject, body);
+  if (!address || !href) return "";
+  return `<div style="margin:24px 6px 0;padding:20px;background:#e3eadf;border:1px solid #cbd7c5;border-radius:14px;"><div style="color:#53635c;font-size:12px;line-height:17px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;">Draft a clean client reply</div><div style="margin-top:8px;color:#394842;font-size:15px;line-height:23px;">This email contains private internal review details. Use this button to open a fresh Gmail draft addressed to the client. It does not quote this internal email.</div><div style="margin-top:14px;"><a href="${escapeHtml(href)}" style="display:inline-block;background:#173f36;color:#fff!important;text-decoration:none;border-radius:9px;padding:13px 20px;font-size:15px;line-height:20px;font-weight:700;">Draft reply to client</a></div><div style="margin-top:10px;color:#6b7067;font-size:12px;line-height:18px;">To: ${escapeHtml(address)}</div></div>`;
+}
+
+function clientFacingQuote(job) {
+  const candidates = [job.clientFacingQuote, job.presentedQuote, job.approvedQuote, job.finalQuote];
+  const value = candidates
+    .map((candidate) => Number(String(candidate ?? "").replace(/[$,]/g, "").trim()))
+    .find((candidate) => Number.isFinite(candidate) && candidate > 0);
+  return value === undefined ? "" : money(value);
+}
+
+function clientReplyDraft(job) {
+  const name = text(job.clientName, "there");
+  const address = text(job.propertyAddress, "the property");
+  const squareFootage = resolveSquareFootage(job);
+  const quote = clientFacingQuote(job);
+  const details = [job.service && `Service: ${text(job.service)}`, job.scope && `Scope: ${text(job.scope)}`, `Property size: ${squareFootage.label}`, quote ? `Quote: ${quote}` : "Quote: [Add the amount Anna wants to present]"];
+  const clientNote = text(job.clientNotes || job.originalRequest, "").slice(0, 2400);
+  return `Hi ${name},\n\nThanks for reaching out about ${address}.\n\n${details.join("\n")}\n${clientNote ? `\nYour note: ${clientNote}\n` : ""}\n[Add or edit any message before sending.]\n\nBest,\nAnna`;
+}
+
 function escapeHtml(value) {
   return text(value, "")
     .replaceAll("&", "&amp;")
@@ -74,7 +123,47 @@ function sizeLookupPanel(address, squareFootage) {
   return `<div class="size-lookup"><strong>Building size needs verification</strong><br><span>Listing sites are leads only—confirm the number before automatic pricing.</span><div>${links}</div></div>`;
 }
 
+function canonicalReviewEmail(job, options = {}) {
+  const address = text(job.propertyAddress);
+  const pricing = quotePricing(job);
+  const squareFootage = resolveSquareFootage(job);
+  const label = text(options.label, "QUOTE READY");
+  const title = text(options.title, label === "QUOTE READY" ? "Review this quote" : "Review this request");
+  const intro = text(options.intro, label === "QUOTE READY"
+    ? "Review the property, research, pricing, and next actions below."
+    : "A new request is ready for review with the same property, pricing, and research context used by the quote workflow.");
+  const addressMapUrl = safeUrl(job.propertyMapUrl)
+    || safeUrl(job.googleMapsLink)
+    || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
+  const recordUrl = safeUrl(job.recordUrl);
+  const approvalUrl = safeUrl(job.approvalUrl);
+  const availabilityReviewUrl = safeUrl(job.availabilityReviewUrl);
+  const aerialUrl = safeUrl(job.emailAerialUrl || job.aerialAttachmentUrl || job.mapUrl);
+  const aerialLink = safeUrl(job.emailAerialLink || aerialUrl || job.mapUrl) || addressMapUrl;
+  const contextMapUrl = safeUrl(job.contextMapUrl);
+  const zimasUrl = safeUrl(job.zimasLink);
+  const includeApproval = options.includeApproval === undefined ? Boolean(approvalUrl) : Boolean(options.includeApproval);
+  const contact = [job.clientEmail, job.clientPhone].map((value) => text(value, "")).filter(Boolean).join(" · ");
+  const details = [job.service, job.scope, job.tourRequested && `3D tour: ${job.tourRequested}`].filter(Boolean).join("\n");
+  const clientReplyEmail = normalizedEmail(job.clientEmail);
+  const subject = `${label} | ${address}`;
+  const clientReplyBody = clientReplyDraft(job);
+  const clientReplyUrl = gmailComposeUrl(clientReplyEmail, `Re: ${subject}`, clientReplyBody);
+  const clientReplyPanelHtml = clientReplyPanel(clientReplyEmail, `Re: ${subject}`, clientReplyBody);
+  const researchLinks = [
+    `<a href="${escapeHtml(addressMapUrl)}">Google Maps ↗</a>`,
+    zimasUrl ? `<a href="${escapeHtml(zimasUrl)}">ZIMAS ↗</a>` : "",
+    aerialLink ? `<a href="${escapeHtml(aerialLink)}">Aerial view ↗</a>` : ""
+  ].filter(Boolean).join(`<span style="color:#9aa69f;padding:0 8px;">·</span>`);
+  const styles = `body{margin:0!important;padding:0!important;background:#f3f1eb;color:#22332e;font-family:Arial,Helvetica,sans-serif}.shell{width:100%;background:#f3f1eb}.canvas{width:calc(100% - 32px);max-width:1100px;margin:0 auto}.pad{padding:28px 0}.card{background:#fbf8f1;border:1px solid #ddd7ca;border-radius:20px}.card-pad{padding:40px}.eyebrow{color:#53635c;font-size:12px;line-height:17px;font-weight:700;letter-spacing:.15em;text-transform:uppercase}.section-title{font-size:16px;line-height:22px;color:#53635c}.title{margin:12px 0 0;color:#173f36;font-size:32px;line-height:40px}.property-head{margin-top:22px;padding:28px;background:#b8c9ae;border-radius:18px}.address{margin:10px 0 8px;font-size:31px;line-height:38px;font-weight:700}.address a{color:#0b57d0!important;text-decoration:underline}.muted{color:#53635c;font-size:15px;line-height:23px}.summary{width:100%;margin-top:22px;border-collapse:collapse}.detail-cell{padding:6px}.detail{background:#e3eadf;border-radius:14px;padding:20px}.detail-value{margin-top:8px;color:#173f36;font-size:18px;line-height:25px;font-weight:700;white-space:pre-line}.research-links{margin:14px 6px 0;padding:13px 16px;background:#fff;border:1px solid #e2ddd2;border-radius:12px;text-align:center;font-size:14px;line-height:22px}.research-links a{color:#0b57d0;font-weight:700;text-decoration:underline}.size-lookup{margin:14px 6px 0;padding:18px 20px;background:#fff4d6;border:1px solid #e4cf91;border-radius:14px;color:#394842;font-size:14px;line-height:21px}.quote{margin:22px 6px 0;background:#b8c9ae;border-radius:16px;text-align:center;padding:25px}.quote-value{margin-top:8px;color:#173f36;font-size:34px;line-height:40px;font-weight:700}.image-wrap{padding:26px 6px 0;text-align:center}.image-label{padding-bottom:9px;text-align:left}.image-fallback{min-height:64px}.button-wrap{text-align:center;padding:30px 0 4px}.button{display:inline-block;min-width:260px;background:#173f36;color:#fff!important;text-decoration:none;border-radius:10px;padding:16px 28px;font-size:16px;line-height:20px;font-weight:700;text-align:center}.availability{margin:26px 6px 0;padding:22px;background:#e3eadf;border:1px solid #cbd7c5;border-radius:14px}.availability .button-wrap{padding:18px 0 0}.secondary{margin-top:16px;text-align:center;font-size:13px;line-height:20px}.secondary a{color:#173f36}.notes{margin:26px 6px 0;padding:22px;background:#fff;border:1px solid #e2ddd2;border-radius:14px;color:#394842;font-size:14px;line-height:21px;white-space:pre-line}@media only screen and (max-width:640px){.canvas{width:100%!important;max-width:none!important}.pad{padding:12px!important}.card-pad{padding:22px 13px!important}.title{font-size:27px!important;line-height:34px!important}.property-head{margin:16px 5px 0!important;padding:19px 16px!important}.address{font-size:23px!important;line-height:29px!important}.summary tr,.detail-cell{display:block!important;width:auto!important}.detail-cell{padding:5px!important}.detail{padding:16px!important}.research-links{margin:10px 5px 0!important;padding:13px 10px!important}.size-lookup{margin:10px 5px 0!important;padding:16px!important}.quote{margin:13px 5px 0!important;padding:20px 14px!important}.quote-value{font-size:29px!important;line-height:35px!important}.image-wrap{padding:18px 5px 0!important}.availability{margin:18px 5px 0!important;padding:17px!important}.button{display:block!important;min-width:0!important;padding:15px 18px!important}.notes{margin:18px 5px 0!important;padding:17px!important}}`;
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><style>${styles}</style></head><body><table role="presentation" class="shell" width="100%" cellspacing="0" cellpadding="0"><tr><td class="pad"><table role="presentation" class="canvas" width="100%"><tr><td class="card"><div class="card-pad"><div class="eyebrow section-title">${escapeHtml(label)}</div><h1 class="title">${escapeHtml(title)}</h1><div class="muted" style="margin-top:8px;">${escapeHtml(intro)}</div><div class="property-head"><div class="eyebrow">Property address</div><h2 class="address"><a href="${escapeHtml(addressMapUrl)}">${escapeHtml(address)}</a></h2><div class="muted">· ${escapeHtml(text(job.workflow, "Quick Quote"))} · ${escapeHtml(text(job.status, "Needs Quote"))}</div></div><div class="research-links">${researchLinks}</div><table role="presentation" class="summary" width="100%"><tr>${detail("Client", text(job.clientName))}${detail("Contact", contact)}</tr><tr>${detail("Service requested", text(job.service))}${detail("Scope & options", details)}</tr><tr>${detail("Quote zone", pricing.zoneLabel)}${detail(squareFootage.verified ? "Verified size" : "Size status", squareFootage.label)}</tr></table>${clientReplyPanelHtml}${sizeLookupPanel(address, squareFootage)}<div class="quote"><div class="eyebrow">Suggested quote</div><div class="quote-value">${escapeHtml(money(pricing.finalPrice))}</div><div class="muted">${pricing.zoneMinimum ? `Base service ${escapeHtml(money(pricing.basePrice))}; Zone ${pricing.zoneNumber} sets a ${escapeHtml(money(pricing.zoneMinimum))} minimum. The higher amount wins.` : "Assign a zone before approval. Zone minimums are floors, never add-ons."}</div></div><table role="presentation" width="100%" cellspacing="0" cellpadding="0">${imageCard("01", "Property close-up", aerialUrl, aerialLink, addressMapUrl)}${imageCard("02", "Greater LA context", contextMapUrl, contextMapUrl || addressMapUrl, addressMapUrl)}</table>${job.quoteNotes ? `<div class="notes"><strong>${label === "NEW REQUEST" ? "Review notes" : "Pricing review"}</strong><br>${escapeHtml(job.quoteNotes)}</div>` : ""}${availabilityReviewUrl ? `<div class="availability"><div class="eyebrow">Optional appointment availability</div><div class="muted" style="margin-top:8px;">Review the live employee calendars and send the client up to three recommended appointment times. No calendar event is created by this step.</div><div class="button-wrap"><a class="button" href="${escapeHtml(availabilityReviewUrl)}">Check availability &amp; send options</a></div></div>` : ""}${includeApproval && approvalUrl ? `<div class="button-wrap"><a class="button" href="${escapeHtml(approvalUrl)}">Review &amp; approve quote</a></div>` : ""}<div class="secondary">${internalLink("Open Airtable record", recordUrl)}${job.gmailThreadUrl ? ` &nbsp; ${internalLink("Open Gmail thread", job.gmailThreadUrl)}` : ""}</div></div></td></tr></table></td></tr></table></body></html>`;
+  const plainText = [label, title, intro, address, `Client: ${text(job.clientName)}`, `Contact: ${contact}`, `Service: ${text(job.service)}`, `Scope & options: ${details}`, `Quote zone: ${pricing.zoneLabel}`, `${squareFootage.verified ? "Verified size" : "Size status"}: ${squareFootage.label}`, `Suggested quote: ${money(pricing.finalPrice)}`, pricing.zoneMinimum && `Pricing rule: base ${money(pricing.basePrice)}; Zone ${pricing.zoneNumber} minimum ${money(pricing.zoneMinimum)}; the higher amount wins.`, job.quoteNotes && `Review notes: ${job.quoteNotes}`, availabilityReviewUrl && `Check availability and send appointment options: ${availabilityReviewUrl}`, includeApproval && approvalUrl && `Review and approve: ${approvalUrl}`, recordUrl && `Airtable record: ${recordUrl}`, job.gmailThreadUrl && `Gmail thread: ${job.gmailThreadUrl}`, clientReplyUrl && `Draft a clean client reply: ${clientReplyUrl}`].filter(Boolean).join("\n\n");
+  return { subject, html, text: plainText, clientReplyUrl };
+}
+
 function quoteReadyEmail(job) {
+  return canonicalReviewEmail(job, { label: "QUOTE READY", title: "Review this quote" });
+  /* Legacy implementation retained below until the next cleanup pass. */
   const address = text(job.propertyAddress);
   const pricing = quotePricing(job);
   const squareFootage = resolveSquareFootage(job);
@@ -91,12 +180,16 @@ function quoteReadyEmail(job) {
   job = { ...job, mapUrl: mapUrl || safeUrl(job.emailAerialLink) || "", aerialAttachmentUrl: mapUrl || safeUrl(job.emailAerialLink) || "" };
   const contextMapUrl = safeUrl(job.contextMapUrl);
   const subject = `QUOTE READY | ${address}`;
+  const clientReplyEmail = normalizedEmail(job.clientEmail);
+  const clientReplyBody = clientReplyDraft(job);
+  const clientReplyUrl = gmailComposeUrl(clientReplyEmail, `Re: ${subject}`, clientReplyBody);
+  const clientReplyPanelHtml = clientReplyPanel(clientReplyEmail, `Re: ${subject}`, clientReplyBody);
 
   const html = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>
 body{margin:0!important;padding:0!important;background:#f3f1eb;color:#22332e;font-family:Arial,Helvetica,sans-serif}.shell{width:100%;background:#f3f1eb}.canvas{width:calc(100% - 32px);max-width:1100px;margin:0 auto}.pad{padding:28px 0}.card{background:#fbf8f1;border:1px solid #ddd7ca;border-radius:20px}.card-pad{padding:40px}.eyebrow{color:#53635c;font-size:12px;line-height:17px;font-weight:700;letter-spacing:.15em;text-transform:uppercase}.section-title{font-size:16px;line-height:22px;color:#53635c}.property-head{margin-top:22px;padding:28px;background:#b8c9ae;border-radius:18px}.address{margin:10px 0 8px;font-size:31px;line-height:38px;font-weight:700}.address a{color:#0b57d0!important;text-decoration:underline}.muted{color:#53635c;font-size:15px;line-height:23px}.summary{width:100%;margin-top:22px;border-collapse:collapse}.detail-cell{padding:6px}.detail{background:#e3eadf;border-radius:14px;padding:20px}.detail-value{margin-top:8px;color:#173f36;font-size:18px;line-height:25px;font-weight:700}.size-lookup{margin:14px 6px 0;padding:18px 20px;background:#fff4d6;border:1px solid #e4cf91;border-radius:14px;color:#394842;font-size:14px;line-height:21px}.quote{margin:22px 6px 0;background:#b8c9ae;border-radius:16px;text-align:center;padding:25px}.quote-value{margin-top:8px;color:#173f36;font-size:34px;line-height:40px;font-weight:700}.image-wrap{padding:26px 6px 0;text-align:center}.image-label{padding-bottom:9px;text-align:left}.button-wrap{text-align:center;padding:30px 0 4px}.button{display:inline-block;min-width:260px;background:#173f36;color:#fff!important;text-decoration:none;border-radius:10px;padding:16px 28px;font-size:16px;line-height:20px;font-weight:700;text-align:center}.availability{margin:26px 6px 0;padding:22px;background:#e3eadf;border:1px solid #cbd7c5;border-radius:14px}.availability .button-wrap{padding:18px 0 0}.secondary{margin-top:16px;text-align:center;font-size:13px;line-height:20px}.secondary a{color:#173f36}.notes{margin:26px 6px 0;padding:22px;background:#fff;border:1px solid #e2ddd2;border-radius:14px;color:#394842;font-size:14px;line-height:21px;white-space:pre-line}
 @media only screen and (max-width:640px){.canvas{width:100%!important;max-width:none!important}.pad{padding:12px!important}.card-pad{padding:22px 13px!important}.property-head{margin:16px 5px 0!important;padding:19px 16px!important}.address{font-size:23px!important;line-height:29px!important}.summary tr,.detail-cell{display:block!important;width:auto!important}.detail-cell{padding:5px!important}.detail{padding:16px!important}.size-lookup{margin:10px 5px 0!important;padding:16px!important}.quote{margin:13px 5px 0!important;padding:20px 14px!important}.quote-value{font-size:29px!important;line-height:35px!important}.image-wrap{padding:18px 5px 0!important}.availability{margin:18px 5px 0!important;padding:17px!important}.button{display:block!important;min-width:0!important;padding:15px 18px!important}.notes{margin:18px 5px 0!important;padding:17px!important}}
-</style></head><body><table role="presentation" class="shell" width="100%" cellspacing="0" cellpadding="0"><tr><td class="pad"><table role="presentation" class="canvas" width="100%" cellspacing="0" cellpadding="0"><tr><td class="card"><div class="card-pad"><div class="eyebrow section-title">QUOTE READY</div><div class="property-head"><div class="eyebrow">Property address</div><h1 class="address"><a href="${addressMapUrl}">${escapeHtml(address)}</a></h1><div class="muted">· ${escapeHtml(text(job.workflow, "Quick Quote"))} · ${escapeHtml(text(job.status, "Needs Quote"))}</div></div><table role="presentation" class="summary" width="100%"><tr>${detail("Service requested", text(job.service))}${detail("Quote zone", zone)}</tr><tr>${detail(squareFootage.verified ? "Verified size" : "Size status", squareFootage.label)}${detail("3D tour", text(job.tourRequested, "No"))}</tr>${job.clientName || job.clientEmail || job.clientPhone ? `<tr>${detail("Client", text(job.clientName))}${detail("Contact", [job.clientEmail, job.clientPhone].map((value) => text(value, "")).filter(Boolean).join(" · "))}</tr>` : ""}</table>${sizeLookupPanel(address, squareFootage)}<div class="quote"><div class="eyebrow">Suggested quote</div><div class="quote-value">${escapeHtml(money(pricing.finalPrice))}</div><div class="muted">${pricing.zoneMinimum ? `Base service ${escapeHtml(money(pricing.basePrice))}; Zone ${pricing.zoneNumber} sets a ${escapeHtml(money(pricing.zoneMinimum))} minimum. The higher amount wins.` : "Assign a zone before approval. Zone minimums are floors, never add-ons."}</div></div><table role="presentation" width="100%" cellspacing="0" cellpadding="0">${imageCard("01", "Property close-up", job.mapUrl, job.mapUrl)}${imageCard("02", "Greater LA context", job.contextMapUrl, job.contextMapUrl)}</table>${job.quoteNotes ? `<div class="notes"><strong>Pricing review</strong><br>${escapeHtml(job.quoteNotes)}</div>` : ""}${approvalUrl ? `<div class="button-wrap"><a class="button" href="${escapeHtml(approvalUrl)}">Review &amp; approve quote</a></div>` : ""}${recordUrl ? `<div class="secondary"><a href="${escapeHtml(recordUrl)}">Open Airtable record</a></div>` : ""}</div></td></tr></table></td></tr></table></body></html>`;
+</style></head><body><table role="presentation" class="shell" width="100%" cellspacing="0" cellpadding="0"><tr><td class="pad"><table role="presentation" class="canvas" width="100%"><tr><td class="card"><div class="card-pad"><div class="eyebrow section-title">QUOTE READY</div><div class="property-head"><div class="eyebrow">Property address</div><h1 class="address"><a href="${addressMapUrl}">${escapeHtml(address)}</a></h1><div class="muted">· ${escapeHtml(text(job.workflow, "Quick Quote"))} · ${escapeHtml(text(job.status, "Needs Quote"))}</div></div><table role="presentation" class="summary" width="100%"><tr>${detail("Service requested", text(job.service))}${detail("Quote zone", zone)}</tr><tr>${detail(squareFootage.verified ? "Verified size" : "Size status", squareFootage.label)}${detail("3D tour", text(job.tourRequested, "No"))}</tr>${job.clientName || job.clientEmail || job.clientPhone ? `<tr>${detail("Client", text(job.clientName))}${detail("Contact", [job.clientEmail, job.clientPhone].map((value) => text(value, "")).filter(Boolean).join(" · "))}</tr>` : ""}</table>${clientReplyPanelHtml}${sizeLookupPanel(address, squareFootage)}<div class="quote"><div class="eyebrow">Suggested quote</div><div class="quote-value">${escapeHtml(money(pricing.finalPrice))}</div><div class="muted">${pricing.zoneMinimum ? `Base service ${escapeHtml(money(pricing.basePrice))}; Zone ${pricing.zoneNumber} sets a ${escapeHtml(money(pricing.zoneMinimum))} minimum. The higher amount wins.` : "Assign a zone before approval. Zone minimums are floors, never add-ons."}</div></div><table role="presentation" width="100%" cellspacing="0" cellpadding="0">${imageCard("01", "Property close-up", job.mapUrl, job.mapUrl)}${imageCard("02", "Greater LA context", job.contextMapUrl, job.contextMapUrl)}</table>${job.quoteNotes ? `<div class="notes"><strong>Pricing review</strong><br>${escapeHtml(job.quoteNotes)}</div>` : ""}${approvalUrl ? `<div class="button-wrap"><a class="button" href="${escapeHtml(approvalUrl)}">Review &amp; approve quote</a></div>` : ""}${recordUrl ? `<div class="secondary"><a href="${escapeHtml(recordUrl)}">Open Airtable record</a></div>` : ""}</div></td></tr></table></td></tr></table></body></html>`;
 
   const plainText = [
     "QUOTE READY",
@@ -111,7 +204,8 @@ body{margin:0!important;padding:0!important;background:#f3f1eb;color:#22332e;fon
     job.quoteNotes && `Pricing review: ${job.quoteNotes}`,
     availabilityReviewUrl && `Check availability and send appointment options: ${availabilityReviewUrl}`,
     approvalUrl && `Review and approve: ${approvalUrl}`,
-    recordUrl && `Airtable record: ${recordUrl}`
+    recordUrl && `Airtable record: ${recordUrl}`,
+    clientReplyUrl && `Draft a clean client reply: ${clientReplyUrl}`
   ].filter(Boolean).join("\n\n");
 
   const availabilityPanel = availabilityReviewUrl
@@ -120,7 +214,7 @@ body{margin:0!important;padding:0!important;background:#f3f1eb;color:#22332e;fon
   const renderedHtml = availabilityPanel
     ? html.replace("</div></td></tr></table></td></tr></table></body>", `${availabilityPanel}</div></td></tr></table></td></tr></table></body>`)
     : html;
-  return { subject, html: renderedHtml, text: plainText };
+  return { subject, html: renderedHtml, text: plainText, clientReplyUrl };
 }
 
 function clientQuoteEmail(job, proposalUrl = "", slots = []) {
@@ -232,6 +326,8 @@ function internalEmailShell(label, title, intro, bodyHtml, bodyText) {
 }
 
 function newRequestEmail(job) {
+  return canonicalReviewEmail(job, { label: "NEW REQUEST", title: text(job.clientName, "New website request") });
+  /* Legacy implementation retained below until the next cleanup pass. */
   const address = text(job.propertyAddress);
   const pricing = quotePricing(job);
   const squareFootage = resolveSquareFootage(job);
@@ -240,6 +336,11 @@ function newRequestEmail(job) {
   const recordUrl = safeUrl(job.recordUrl);
   const approvalUrl = safeUrl(job.approvalUrl);
   const availabilityReviewUrl = safeUrl(job.availabilityReviewUrl);
+  const clientReplyEmail = normalizedEmail(job.clientEmail);
+  const clientReplySubject = `Re: NEW REQUEST | ${text(job.clientName, "FloorPlanDrawings request")}`;
+  const clientReplyBody = clientReplyDraft(job);
+  const clientReplyUrl = gmailComposeUrl(clientReplyEmail, clientReplySubject, clientReplyBody);
+  const clientReplyPanelHtml = clientReplyPanel(clientReplyEmail, clientReplySubject, clientReplyBody);
   const details = [job.service, job.scope, job.tourRequested && `3D tour: ${job.tourRequested}`].filter(Boolean).join("\n");
   const contact = [job.clientEmail, job.clientPhone].filter(Boolean).join(" · ");
   const emailAerialUrl = safeUrl(job.emailAerialUrl || job.aerialAttachmentUrl || job.mapUrl);
@@ -248,7 +349,7 @@ function newRequestEmail(job) {
   const availabilityPanel = availabilityReviewUrl
     ? `<div class="availability"><div class="eyebrow">Optional appointment availability</div><div class="muted" style="margin-top:8px;">Review the live employee calendars and send the client up to three recommended appointment times. No calendar event is created by this step.</div><div class="button-wrap"><a class="button" href="${escapeHtml(availabilityReviewUrl)}">Check availability &amp; send options</a></div></div>`
     : "";
-  const bodyHtml = `<div class="property-head"><div class="eyebrow">Property address</div><h2 class="address"><a href="${escapeHtml(addressMapUrl)}">${escapeHtml(address)}</a></h2><div class="muted">· ${escapeHtml(text(job.workflow, "Quick Quote"))} · ${escapeHtml(text(job.status, "Needs Quote"))}</div></div><table role="presentation" class="summary" width="100%"><tr>${detail("Client", text(job.clientName))}${detail("Contact", contact)}</tr><tr>${detail("Service requested", text(job.service))}${detail("Scope & options", details)}</tr><tr>${detail("Quote zone", pricing.zoneLabel)}${detail(squareFootage.verified ? "Verified size" : "Size status", squareFootage.label)}</tr></table>${sizeLookupPanel(address, squareFootage)}<div class="quote"><div class="eyebrow">Suggested quote</div><div class="quote-value">${escapeHtml(money(pricing.finalPrice))}</div><div class="muted">${pricing.zoneMinimum ? `Base service ${escapeHtml(money(pricing.basePrice))}; Zone ${pricing.zoneNumber} sets a ${escapeHtml(money(pricing.zoneMinimum))} minimum. The higher amount wins.` : "Assign a zone before approval. Zone minimums are floors, never add-ons."}</div></div>${imageRows ? `<table role="presentation" width="100%" cellspacing="0" cellpadding="0">${imageRows}</table>` : ""}${job.quoteNotes ? `<div class="notes"><strong>Review notes</strong><br>${escapeHtml(job.quoteNotes)}</div>` : ""}${availabilityPanel}${approvalUrl ? `<div class="button-wrap"><a class="button" href="${escapeHtml(approvalUrl)}">Review &amp; approve quote</a></div>` : ""}<div class="button-wrap">${internalLink("Open Airtable record", recordUrl)}${job.gmailThreadUrl ? ` &nbsp; ${internalLink("Open Gmail thread", job.gmailThreadUrl)}` : ""}</div>`;
+  const bodyHtml = `<div class="property-head"><div class="eyebrow">Property address</div><h2 class="address"><a href="${escapeHtml(addressMapUrl)}">${escapeHtml(address)}</a></h2><div class="muted">· ${escapeHtml(text(job.workflow, "Quick Quote"))} · ${escapeHtml(text(job.status, "Needs Quote"))}</div></div><table role="presentation" class="summary" width="100%"><tr>${detail("Client", text(job.clientName))}${detail("Contact", contact)}</tr><tr>${detail("Service requested", text(job.service))}${detail("Scope & options", details)}</tr><tr>${detail("Quote zone", pricing.zoneLabel)}${detail(squareFootage.verified ? "Verified size" : "Size status", squareFootage.label)}</tr></table>${clientReplyPanelHtml}${sizeLookupPanel(address, squareFootage)}<div class="quote"><div class="eyebrow">Suggested quote</div><div class="quote-value">${escapeHtml(money(pricing.finalPrice))}</div><div class="muted">${pricing.zoneMinimum ? `Base service ${escapeHtml(money(pricing.basePrice))}; Zone ${pricing.zoneNumber} sets a ${escapeHtml(money(pricing.zoneMinimum))} minimum. The higher amount wins.` : "Assign a zone before approval. Zone minimums are floors, never add-ons."}</div></div>${imageRows ? `<table role="presentation" width="100%" cellspacing="0" cellpadding="0">${imageRows}</table>` : ""}${job.quoteNotes ? `<div class="notes"><strong>Review notes</strong><br>${escapeHtml(job.quoteNotes)}</div>` : ""}${availabilityPanel}${approvalUrl ? `<div class="button-wrap"><a class="button" href="${escapeHtml(approvalUrl)}">Review &amp; approve quote</a></div>` : ""}<div class="button-wrap">${internalLink("Open Airtable record", recordUrl)}${job.gmailThreadUrl ? ` &nbsp; ${internalLink("Open Gmail thread", job.gmailThreadUrl)}` : ""}</div>`;
   const bodyText = [
     `Client: ${text(job.clientName)}`,
     `Contact: ${contact}`,
@@ -264,9 +365,10 @@ function newRequestEmail(job) {
     approvalUrl && `Review and approve quote: ${approvalUrl}`,
     recordUrl && `Airtable record: ${recordUrl}`,
     job.gmailThreadUrl && `Gmail thread: ${job.gmailThreadUrl}`,
+    clientReplyUrl && `Draft a clean client reply: ${clientReplyUrl}`,
     `Map: ${addressMapUrl}`
   ].filter(Boolean).join("\n\n");
-  return internalEmailShell("NEW REQUEST", text(job.clientName, "New website request"), "A new website order is ready for review with the same property, pricing, and research context used by the quote workflow.", bodyHtml, bodyText);
+  return { ...internalEmailShell("NEW REQUEST", text(job.clientName, "New website request"), "A new website order is ready for review with the same property, pricing, and research context used by the quote workflow.", bodyHtml, bodyText), clientReplyUrl };
 }
 
 function propertyReviewEmail(job) {
@@ -278,9 +380,9 @@ function propertyReviewEmail(job) {
 
 function roleClarificationEmail({ propertyAddress = "", contacts = [], recordUrl = "" } = {}) {
   const people = (Array.isArray(contacts) ? contacts : []).map((contact) => `${text(contact.name, "Unknown contact")} · ${text(contact.email)}`).join("\n");
-  const rows = `<div class="property-head"><div class="eyebrow">Property address</div><h2 class="address">${escapeHtml(propertyAddress)}</h2></div><div class="panel"><strong>Who should receive client-facing messages?</strong><br>Reply with the role for each contact: <strong>CLIENT</strong>, <strong>AGENT</strong>, or <strong>INTERNAL</strong>. Render will not send confirmations, reminders, or quotes to an unclassified contact.</div><div class="notes"><strong>Contacts needing classification</strong><br>${escapeHtml(people || "No contact address was extracted.")}</div><div class="secondary">${internalLink("Open Airtable record", recordUrl)}</div>`;
-  const bodyText = [`ROLE CLARIFICATION`, `Property: ${text(propertyAddress)}`, "Reply with CLIENT, AGENT, or INTERNAL for each listed contact. No client-facing email will be sent until the role is explicit.", people && `Contacts:\n${people}`, recordUrl && `Airtable record: ${recordUrl}`].filter(Boolean).join("\n\n");
-  return internalEmailShell("ROLE CLARIFICATION", text(propertyAddress, "Unclassified Gmail intake"), "Render found an ambiguous contact role and paused client-facing communication.", rows, bodyText);
+  const rows = `<div class="property-head"><div class="eyebrow">Property address</div><h2 class="address">${escapeHtml(propertyAddress)}</h2></div><div class="panel"><strong>INTERNAL ONLY — ANNA ACTION REQUIRED</strong><br>Render paused client-facing messages because it cannot tell who is the client and who is the agent.<br><br>Reply to this email with one line per contact, for example: <strong>Conrad — AGENT</strong> or <strong>Alex — CLIENT</strong>.</div><div class="notes"><strong>Contacts needing classification</strong><br>${escapeHtml(people || "No contact address was extracted.")}</div><div class="secondary">${internalLink("Open Airtable record", recordUrl)}</div>`;
+  const bodyText = [`INTERNAL ONLY — ANNA ACTION REQUIRED`, `Property: ${text(propertyAddress)}`, "Reply to this email with one line per contact: NAME — CLIENT, AGENT, or INTERNAL. No client-facing email will be sent until the role is explicit.", people && `Contacts:\n${people}`, recordUrl && `Airtable record: ${recordUrl}`].filter(Boolean).join("\n\n");
+  return internalEmailShell("ACTION NEEDED", `Clarify contact roles | ${text(propertyAddress, "Unclassified Gmail intake")}`, "Render paused this job until Anna identifies the client and agent. This message is internal and is not sent to either contact.", rows, bodyText);
 }
 
 function followUpEmail(jobs, dateLabel) {
