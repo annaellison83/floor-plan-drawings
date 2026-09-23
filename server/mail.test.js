@@ -21,8 +21,10 @@ function withEnv(values, callback) {
 test("retries transient SMTP failures and reports attempts", async () => {
   const original = nodemailer.createTransport;
   let attempts = 0;
+  let sentMessage;
   nodemailer.createTransport = () => ({
-    sendMail: async () => {
+    sendMail: async (message) => {
+      sentMessage = message;
       attempts += 1;
       if (attempts < 3) {
         const error = new Error("temporary connection issue");
@@ -50,6 +52,7 @@ test("retries transient SMTP failures and reports attempts", async () => {
       assert.equal(result.attempts, 3);
       assert.equal(result.provider, "primary");
       assert.equal(attempts, 3);
+      assert.equal(sentMessage.from, '"FloorPlanDrawings" <sender@example.com>');
     });
   } finally {
     nodemailer.createTransport = original;

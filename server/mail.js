@@ -4,6 +4,13 @@ function clean(value) {
   return value === undefined || value === null ? "" : String(value).trim();
 }
 
+function formatFromAddress(address, displayName) {
+  const source = clean(address);
+  const name = clean(displayName);
+  if (!source || !name || source.includes("<")) return source;
+  return `"${name.replaceAll('"', "'").replaceAll("\\", "\\\\")}" <${source}>`;
+}
+
 function smtpConfig(prefix = null) {
   const icloudConfigured = Boolean(
     clean(process.env.ICLOUD_SMTP_HOST) &&
@@ -90,14 +97,18 @@ async function sendMail(message) {
   const configuredDelay = Number(clean(process.env.MAIL_RETRY_DELAY_MS));
   const maxAttempts = Math.max(1, Math.min(4, Number.isFinite(configuredAttempts) && configuredAttempts > 0 ? configuredAttempts : 3));
   const delayMs = Math.max(0, Math.min(5000, Number.isFinite(configuredDelay) && configuredDelay >= 0 ? configuredDelay : 500));
-  const from = clean(process.env.MAIL_FROM) || configs[0].auth.user;
+  const from = formatFromAddress(
+    clean(process.env.MAIL_FROM) || configs[0].auth.user,
+    clean(message.fromName) || clean(process.env.MAIL_FROM_NAME) || "FloorPlanDrawings"
+  );
+  const { fromName, ...mailMessage } = message;
   let lastError;
 
   for (let providerIndex = 0; providerIndex < configs.length; providerIndex += 1) {
     const transport = createTransport(configs[providerIndex]);
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
-        const result = await transport.sendMail({ from, ...message });
+        const result = await transport.sendMail({ from, ...mailMessage });
 
         return {
           accepted: Array.isArray(result.accepted) ? result.accepted.length : 0,

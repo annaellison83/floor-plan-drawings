@@ -15,21 +15,26 @@ const { calendarAirtableFields, calendarEventKey, extractAddress, findProjectMat
 const { proposalPayload, signProposal, verifyProposal } = require("./appointment-proposals");
 const { hasFallbackSmtp, isSmtpConfigured, sendFailureAlert, sendMail, verifySmtp } = require("./mail");
 const { projectState, recipientsFor } = require("./project-state");
-const { createGmailClient, isGmailConfigured, isLikelyFloorPlanIntake, parseGmailMessage, processIntakeMessages } = require("./gmail-runtime");
-const { findGmailAirtableMatch, gmailAirtableFields, patchMissingGmailFields } = require("./gmail-airtable-sync");
+const { createGmailClient, isGmailConfigured, isGmailDraftConfigured, isLikelyFloorPlanIntake, parseGmailMessage, processIntakeMessages } = require("./gmail-runtime");
+const { findGmailAirtableMatch, gmailAirtableFields, isGeneratedPropertyFallback, patchMissingGmailFields } = require("./gmail-airtable-sync");
 const { translateClientNotes } = require("./note-translation");
 const { assetFilename, prepareEmailAssets, readAsset } = require("./image-assets");
+const { researchAddress, buildUpdateFields } = require("../netlify/functions/property-research");
 const {
   clientQuoteEmail,
   clientAvailabilityProposalEmail,
   clientAppointmentConfirmationEmail,
   clientAppointmentReminderEmail,
+  clientReplyDraft,
+  clientReplyHtml,
+  buildClientReplySubject,
   followUpEmail,
   newRequestEmail,
   propertyReviewEmail,
   quoteReadyEmail,
   roleClarificationEmail
 } = require("./email-templates");
+const { verifyClientDraft } = require("./email-drafts");
 const {
   createClientQuoteLog,
   createInboundCommunicationLog,
@@ -84,6 +89,7 @@ const TEST_PROPERTY_ADDRESSES = [
 ];
 // Test-only delivery target. Production notifications continue to use SMTP_USER.
 const TEST_EMAIL_RECIPIENT = "eric.greenburg@gmail.com";
+const clientDraftCache = new Map();
 const quoteReadyLocks = new Set();
 const clientQuoteLocks = new Set();
 const internalNotificationLocks = new Set();
@@ -162,6 +168,11 @@ function html(res, status, body) {
     "Referrer-Policy": "no-referrer"
   });
   res.end(body);
+}
+
+function propertyAssetMessage(res, status, message, address) {
+  const mapUrl = `https://earth.google.com/web/search/${encodeURIComponent(clean(address))}`;
+  return html(res, status, `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Property link unavailable</title><main style="font:16px system-ui;max-width:620px;margin:12vh auto;padding:24px"><h1>${message}</h1><p>The saved property asset is unavailable right now. Use the map view while research is retried.</p><p><a href="${mapUrl}">Open map view ↗</a></p></main>`);
 }
 
 function isAuthorized(req) {
@@ -434,7 +445,8 @@ async function syncGmailMessageToAirtable(message, project, airtableRecords = []
   if (existing) {
     const patch = patchMissingGmailFields(existing, fields);
     if (Object.keys(patch).length) await updateJob(existing.id, patch);
-    return { action: "matched", recordId: existing.id, patchFields: Object.keys(patch), key: fields["Normalized Property Key"] };
+    const enrichment = await enrichGmailProperty(existing.id, { ...fields, ...existing.fields, ...patch });
+    return { action: "matched", recordId: existing.id, patchFields: Object.keys(patch), enrichment, key: fields["Normalized Property Key"] };
   }
   const created = await createAirtableIntakeRecord({ fields });
   const record = created.record || {};
@@ -442,22 +454,71 @@ async function syncGmailMessageToAirtable(message, project, airtableRecords = []
   if (created.duplicate && record.id) {
     const patch = patchMissingGmailFields(record, fields);
     if (Object.keys(patch).length) await updateJob(record.id, patch);
-    return { action: "matched", duplicate: true, recordId: record.id, patchFields: Object.keys(patch), key: fields["Normalized Property Key"] };
+    const enrichment = await enrichGmailProperty(record.id, { ...fields, ...record.fields, ...patch });
+    return { action: "matched", duplicate: true, recordId: record.id, patchFields: Object.keys(patch), enrichment, key: fields["Normalized Property Key"] };
   }
-  return { action: "created", recordId: record.id || "", key: fields["Normalized Property Key"], omittedFields: created.omittedFields || [] };
+  const enrichment = record.id ? await enrichGmailProperty(record.id, { ...fields, ...(record.fields || {}) }) : { ok: false, skipped: true, reason: "record id is missing" };
+  return { action: "created", recordId: record.id || "", enrichment, key: fields["Normalized Property Key"], omittedFields: created.omittedFields || [] };
+}
+
+async function enrichGmailProperty(recordId, fields = {}) {
+  const address = clean(fields["Property Address"] || fields["Full Address"]);
+  if (!recordId || !address) return { ok: false, skipped: true, reason: "property address is missing" };
+  if (fields["Property Research Complete"] && clean(fields["Property Check Status"]) && clean(fields["Property Check Status"]) !== "Needs Manual Review") {
+    return { ok: true, skipped: true, reason: "already researched" };
+  }
+  try {
+    const research = await researchAddress(address, { mapQuery: fields["Map Query"] });
+    const built = buildUpdateFields(research, fields);
+    const allowed = new Set(["Property Check Status", "Property Data Source URL", "Google Sq Ft Search URL", "Property Research Complete", "LA City Match Status", "APN", "PIN", "Lot Size", "Zoning", "Neighborhood / LA Area", "Miles From North Hollywood", "Miles From Monterey Park", "Aerial Map URL", "Satellite Photo Link", "Aerial Parcel Preview", "LA Context Map URL", "LA Context Map Preview", "ZIMAS Link", "Google Maps Link"]);
+    const researchFields = {};
+    let assetReady = false;
+    for (const [key, value] of Object.entries(built)) {
+      if (!allowed.has(key) || value === "" || value === null || value === undefined) continue;
+      if (key === "Property Research Complete") {
+        researchFields[key] = Boolean(research.ok);
+      } else if (["Property Check Status", "LA City Match Status"].includes(key) || !clean(fields[key]) || isGeneratedPropertyFallback(key, fields[key], address)) {
+        researchFields[key] = value;
+      }
+    }
+    if (research.ok) {
+      const prepared = await prepareEmailAssets({ propertyAddress: address, mapUrl: researchFields["Aerial Map URL"], satellitePhotoLink: researchFields["Satellite Photo Link"] }, { regenerate: false }).catch(() => null);
+      assetReady = Boolean(prepared && prepared.emailAerialUrl);
+      if (prepared && prepared.emailAerialUrl && (!clean(fields["Aerial Map URL"]) || isGeneratedPropertyFallback("Aerial Map URL", fields["Aerial Map URL"], address))) {
+        researchFields["Aerial Map URL"] = prepared.emailAerialUrl;
+        researchFields["Satellite Photo Link"] = prepared.emailAerialUrl;
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(researchFields, "Property Research Complete")) researchFields["Property Research Complete"] = Boolean(research.ok && assetReady);
+    if (Object.keys(researchFields).length) await updateJob(recordId, researchFields);
+    return { ok: Boolean(research.ok), status: research.status, researchFields: Object.keys(researchFields) };
+  } catch (error) {
+    console.warn("Gmail property research failed", error.message);
+    try { await updateJob(recordId, { "Property Research Complete": false, "Property Check Status": "Needs Manual Review" }); } catch (updateError) { console.warn("Gmail property research retry state failed", updateError.message); }
+    return { ok: false, retryable: true, error: error.message };
+  }
 }
 
 async function backfillGmailProjectsToAirtable(client, airtableRecords, results) {
   if (!gmailAirtableSyncEnabled()) return;
   const cap = Math.max(0, Math.min(25, Number(process.env.GMAIL_AIRTABLE_BACKFILL_MAX) || 5));
   let attempted = 0;
-  for (const project of projectState.listProjects({ limit: 500 })) {
+  const now = Date.now();
+  const candidates = projectState.listProjects({ limit: 500 })
+    .filter((project) => {
+      const lastAttempt = Number(project.metadata && project.metadata.gmailPropertyResearchLastAttempt) || 0;
+      return !lastAttempt || now - lastAttempt >= 15 * 60 * 1000;
+    })
+    .sort((a, b) => (Number(a.metadata && a.metadata.gmailPropertyResearchLastAttempt) || 0) - (Number(b.metadata && b.metadata.gmailPropertyResearchLastAttempt) || 0));
+  for (const project of candidates) {
     if (attempted >= cap || project.source !== "gmail" || !project.propertyAddress) continue;
     const threadId = clean(project.metadata && project.metadata.gmailThreadId);
-    if (!threadId || findGmailAirtableMatch(airtableRecords, { threadId, propertyAddress: project.propertyAddress })) continue;
+    const existing = threadId && findGmailAirtableMatch(airtableRecords, { threadId, propertyAddress: project.propertyAddress });
+    if (!threadId || (existing && existing.fields && existing.fields["Property Research Complete"])) continue;
     const messageId = clean(project.metadata && project.metadata.gmailMessageId);
     if (!messageId) continue;
     attempted += 1;
+    projectState.updateProject(project.id, { metadata: { gmailPropertyResearchLastAttempt: Date.now(), gmailPropertyResearchAttempts: (Number(project.metadata && project.metadata.gmailPropertyResearchAttempts) || 0) + 1 } });
     try {
       const raw = await client.getMessage(messageId);
       const parsed = parseGmailMessage(raw, { agentEmails: client.config.agentEmails, clientEmails: client.config.clientEmails });
@@ -614,6 +675,8 @@ async function deliverGmailIntakeNotification(project, message) {
   try {
     const delivery = await sendMail({
       to: internalTo,
+      replyTo: internalTo,
+      fromName: "FloorPlanDrawings Workflow",
       subject: message.subject ? `Re: ${message.subject.replace(/^re:\s*/i, "")}` : email.subject,
       html: email.html,
       text: email.text,
@@ -656,6 +719,8 @@ async function deliverGmailRoleClarification(project, message, recordId) {
     const threadHeaders = [message.references, message.messageId].filter(Boolean).join(" ");
     const delivery = await sendMail({
       to: internalTo,
+      replyTo: internalTo,
+      fromName: "FloorPlanDrawings Workflow",
       subject: email.subject,
       html: email.html,
       text: email.text,
@@ -1223,7 +1288,7 @@ async function deliverQuoteReady(recordId) {
     if (!logRecordId) throw new Error("Airtable did not return the reserved Communication Log ID");
     stateReservation = reserveRenderDelivery({ project, workflow: "QUOTE READY", recipientType: "internal", to: internalTo, subject: email.subject });
     if (stateReservation.duplicate) return { ok: false, status: 409, error: "Duplicate delivery blocked", recordId, deliveryId: stateReservation.delivery.id };
-    const delivery = await sendMail({ to: internalTo, subject: email.subject, html: email.html, text: email.text });
+    const delivery = await sendMail({ to: internalTo, replyTo: internalTo, fromName: "FloorPlanDrawings Workflow", subject: email.subject, html: email.html, text: email.text });
     projectState.updateDelivery(stateReservation.delivery.idempotencyKey, { status: "sent", attempts: delivery.attempts, provider: delivery.provider, messageId: delivery.messageId });
     await updateCommunicationLog(logRecordId, {
       "Delivery Status": "Sent",
@@ -1493,7 +1558,7 @@ async function deliverInternalNotification(recordId, eventType, buildEmail, stat
     if (!logRecordId) throw new Error("Airtable did not return the reserved Communication Log ID");
     stateReservation = reserveRenderDelivery({ project, workflow: eventType, recipientType: "internal", to: internalTo, subject: email.subject });
     if (stateReservation.duplicate) return { ok: false, status: 409, error: "Duplicate delivery blocked", recordId, deliveryId: stateReservation.delivery.id };
-    const delivery = await sendMail({ to: internalTo, subject: email.subject, html: email.html, text: email.text });
+    const delivery = await sendMail({ to: internalTo, replyTo: internalTo, fromName: "FloorPlanDrawings Workflow", subject: email.subject, html: email.html, text: email.text });
     projectState.updateDelivery(stateReservation.delivery.idempotencyKey, { status: "sent", attempts: delivery.attempts, provider: delivery.provider, messageId: delivery.messageId });
     await updateCommunicationLog(logRecordId, {
       "Delivery Status": "Sent",
@@ -1619,7 +1684,7 @@ async function pollFollowUps() {
       return;
     }
     try {
-      const delivery = await sendMail({ to: followUpTo, subject: email.subject, html: email.html, text: email.text });
+      const delivery = await sendMail({ to: followUpTo, replyTo: followUpTo, fromName: "FloorPlanDrawings Workflow", subject: email.subject, html: email.html, text: email.text });
       projectState.updateDelivery(stateReservation.delivery.idempotencyKey, { status: "sent", attempts: delivery.attempts, provider: delivery.provider, messageId: delivery.messageId });
       await updateCommunicationLog(logRecordId, { "Delivery Status": "Sent", Summary: `Delivered by Render via SMTP${delivery.messageId ? `; message ${delivery.messageId}` : ""}` });
       followUpRunDate = today;
@@ -1724,6 +1789,75 @@ function buildTestAppointmentSlots() {
   return slots;
 }
 
+function safeHeader(value) {
+  return clean(value).replace(/[\r\n]+/g, " ");
+}
+
+function encodeGmailDraftMessage({ to, subject, htmlBody, textBody }) {
+  const boundary = `fpd-${crypto.randomBytes(12).toString("hex")}`;
+  const lines = [
+    `To: ${safeHeader(to)}`,
+    `Subject: ${safeHeader(subject)}`,
+    "MIME-Version: 1.0",
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    "",
+    `--${boundary}`,
+    "Content-Type: text/plain; charset=UTF-8",
+    "Content-Transfer-Encoding: 8bit",
+    "",
+    clean(textBody),
+    "",
+    `--${boundary}`,
+    "Content-Type: text/html; charset=UTF-8",
+    "Content-Transfer-Encoding: 8bit",
+    "",
+    htmlBody,
+    "",
+    `--${boundary}--`,
+    ""
+  ];
+  return Buffer.from(lines.join("\r\n"), "utf8").toString("base64url");
+}
+
+function gmailDraftUrl(draftId) {
+  return `https://mail.google.com/mail/u/0/#drafts/${encodeURIComponent(clean(draftId))}`;
+}
+
+async function createFormattedClientDraft(job) {
+  const key = clean(job.recordId);
+  if (clientDraftCache.has(key)) return clientDraftCache.get(key);
+  const promise = (async () => {
+    if (!isGmailDraftConfigured()) throw new Error("Gmail draft creation is not configured");
+    const clientEmail = clean(job.clientEmail).toLowerCase();
+    if (!clientEmail) throw new Error("Client email is missing");
+    const subject = buildClientReplySubject(job);
+    const gmail = createGmailClient();
+    const draft = await gmail.createDraft({
+      raw: encodeGmailDraftMessage({
+        to: clientEmail,
+        subject,
+        htmlBody: clientReplyHtml(job),
+        textBody: clientReplyDraft(job)
+      }),
+      threadId: clean(job.gmailThreadId)
+    });
+    if (!clean(draft && draft.id)) throw new Error("Gmail did not return a draft ID");
+    return { draftId: clean(draft.id), url: gmailDraftUrl(draft.id), subject, recipient: clientEmail };
+  })();
+  clientDraftCache.set(key, promise);
+  try {
+    return await promise;
+  } catch (error) {
+    clientDraftCache.delete(key);
+    throw error;
+  }
+}
+
+function clientDraftResultPage(result) {
+  const draftsUrl = "https://mail.google.com/mail/u/0/#drafts";
+  return `<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Draft reply created</title></head><body style="margin:0;background:#f3f1eb;color:#22332e;font-family:Arial,Helvetica,sans-serif;"><main style="max-width:620px;margin:8vh auto;padding:30px 24px;background:#fbf8f1;border:1px solid #ddd7ca;border-radius:14px;"><div style="color:#53635c;font-size:11px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;">FloorPlanDrawings</div><h1 style="margin:12px 0;color:#173f36;font-size:28px;line-height:35px;">Draft reply created</h1><p style="font-size:16px;line-height:25px;">A formatted Gmail draft is ready for <strong>${escapeHtml(result.recipient)}</strong>. Review it, adjust anything you need, and send it from Anna’s Gmail.</p><p style="font-size:14px;line-height:22px;color:#53635c;">Subject: ${escapeHtml(result.subject)}</p><p style="margin-top:22px;"><a href="${escapeHtml(result.url)}" style="display:inline-block;padding:13px 18px;border-radius:8px;background:#173f36;color:#fff;text-decoration:none;font-weight:700;">Open draft</a></p><p style="font-size:13px;line-height:20px;color:#53635c;">On iPhone, if the button stays in the browser, open the Gmail app and tap Drafts. The draft is already saved there.</p><p><a href="${draftsUrl}" style="color:#0b57d0;">Open Gmail Drafts</a></p></main></body></html>`;
+}
+
 function testSchedulingPreviewJob() {
   return {
     clientName: "Eric Greenburg",
@@ -1761,7 +1895,7 @@ async function route(req, res) {
       const body = await response.json().catch(() => ({}));
       const pin = clean(body && body.research && body.research.zimas
         && body.research.zimas.parcel && body.research.zimas.parcel.pin);
-      if (!response.ok || !pin) return json(res, 404, { error: "ZIMAS parcel unavailable" });
+      if (!response.ok || !pin) return propertyAssetMessage(res, 404, "ZIMAS parcel unavailable", address);
       res.writeHead(302, {
         Location: `https://zimas.lacity.org/zimas-classic/ProjectDataTab?pin=${encodeURIComponent(pin)}`,
         "Cache-Control": "public, max-age=3600"
@@ -1769,7 +1903,7 @@ async function route(req, res) {
       return res.end();
     } catch (error) {
       console.warn("Portal ZIMAS link failed", error.message);
-      return json(res, 502, { error: "ZIMAS parcel unavailable" });
+      return propertyAssetMessage(res, 502, "ZIMAS parcel unavailable", address);
     }
   }
   if (req.method === "GET" && url.pathname === "/assets/property-aerial") {
@@ -1779,7 +1913,7 @@ async function route(req, res) {
       const prepared = await prepareEmailAssets({ propertyAddress: address });
       const source = clean(prepared.emailAssetSource);
       const filePath = source ? readAsset(assetFilename(source)) : null;
-      if (!filePath) return json(res, 404, { error: "Aerial image unavailable" });
+      if (!filePath) return propertyAssetMessage(res, 404, "Aerial image unavailable", address);
       res.writeHead(200, {
         "Content-Type": "image/jpeg",
         "Cache-Control": "public, max-age=86400",
@@ -1788,7 +1922,7 @@ async function route(req, res) {
       return fs.createReadStream(filePath).pipe(res);
     } catch (error) {
       console.warn("Portal aerial asset failed", error.message);
-      return json(res, 502, { error: "Aerial image unavailable" });
+      return propertyAssetMessage(res, 502, "Aerial image unavailable", address);
     }
   }
   if (req.method === "GET" && url.pathname === "/" && host === "master.floorplandrawings.com") {
@@ -1945,6 +2079,24 @@ async function route(req, res) {
     const job = testSchedulingPreviewJob();
     const email = clientAvailabilityProposalEmail(job, "", buildTestAppointmentSlots());
     return html(res, 200, email.html.replace("</body>", "<p style=\"max-width:680px;margin:0 auto 24px;padding:0 16px;color:#6b7067;font:13px/20px Arial,sans-serif;text-align:center;\">TEST ONLY — no appointment was requested or recorded.</p></body>"));
+  }
+
+  // Signed, single-purpose link from the internal review email. Creating the
+  // draft is deliberately a GET so it works from Gmail on desktop and iPhone;
+  // the idempotent cache prevents repeated taps from creating duplicate drafts.
+  if (req.method === "GET" && url.pathname === "/api/email/client-draft") {
+    const payload = verifyClientDraft(clean(url.searchParams.get("token")));
+    if (!payload || !/^rec[A-Za-z0-9]+$/.test(payload.recordId)) {
+      return html(res, 410, "<!doctype html><title>Draft link expired</title><p>This draft link is expired or invalid. Please use the newest internal review email.</p>");
+    }
+    try {
+      const job = await getJob(payload.recordId);
+      const result = await createFormattedClientDraft(job);
+      return html(res, 200, clientDraftResultPage(result));
+    } catch (error) {
+      console.error(`Client draft creation failed: ${error.message}`);
+      return html(res, 502, "<!doctype html><title>Draft unavailable</title><p>We could not create the Gmail draft right now. Please open Gmail and try again from the newest review email.</p>");
+    }
   }
 
   if ((req.method === "GET" || req.method === "POST") && url.pathname === "/api/email/test-scheduling-board") {
@@ -2499,17 +2651,33 @@ async function route(req, res) {
     if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
 
     const recipient = TEST_EMAIL_RECIPIENT;
+    const additionalRecipients = [...new Set(url.searchParams.getAll("also")
+      .map((value) => clean(value).toLowerCase())
+      .filter((value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value))
+      .slice(0, 3))];
+    const recipients = [...new Set([recipient, ...additionalRecipients])];
 
     try {
       const sampleJob = await buildTestQuote();
-      const sample = quoteReadyEmail(await prepareEmailAssets(sampleJob));
-      const delivery = await sendMail({
-        to: recipient,
-        subject: `[TEST — NO WORKFLOW] ${sample.subject}`,
-        html: sample.html,
-        text: sample.text
-      });
-      return json(res, 200, { ok: true, test: true, recipient, ...delivery });
+      let previewDraft = null;
+      if (isGmailDraftConfigured()) {
+        try {
+          previewDraft = await createFormattedClientDraft({ ...sampleJob, recordId: `test-${crypto.randomUUID()}` });
+        } catch (error) {
+          console.warn(`Formatted test draft unavailable: ${error.message}`);
+        }
+      }
+      const sample = quoteReadyEmail({ ...(await prepareEmailAssets(sampleJob)), ...(previewDraft ? { clientDraftUrl: previewDraft.url } : {}) });
+      const deliveries = [];
+      for (const target of recipients) {
+        deliveries.push({ recipient: target, ...(await sendMail({
+          to: target,
+          subject: `[TEST — NO WORKFLOW] ${sample.subject}`,
+          html: sample.html,
+          text: sample.text
+        })) });
+      }
+      return json(res, 200, { ok: true, test: true, recipients, formattedDraft: Boolean(previewDraft), deliveries });
     } catch (error) {
       return json(res, 502, { error: "Test email delivery failed", detail: error.message });
     }

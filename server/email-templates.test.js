@@ -59,10 +59,10 @@ test("internal quote emails provide a clean client draft without changing native
   assert.match(email.clientReplyUrl, /^https:\/\/mail\.google\.com\/mail\/u\/0\/\?/);
   assert.match(email.clientReplyAppUrl, /^googlegmail:\/\/\/co\?/);
   assert.match(email.clientReplyMailtoUrl, /^mailto:client@example\.com\?/);
-  assert.match(email.html, /Draft reply to client/);
-  assert.match(email.html, /does not quote this internal email/);
-  assert.match(email.html, /Open in Gmail app/);
-  assert.match(email.html, /Use Mail composer/);
+  assert.match(email.html, /Draft Reply on Desktop/);
+  assert.match(email.html, /Draft Reply on iPhone/);
+  assert.match(email.html, /plain text; edit before sending/);
+  assert.doesNotMatch(email.html, /Open in Gmail app/);
   assert.match(email.html, /font-weight:700;">Client/);
   assert.match(email.html, /font-weight:700;">Service/);
   assert.match(email.html, /font-weight:700;">Size \/ zone/);
@@ -83,6 +83,21 @@ test("internal quote emails provide a clean client draft without changing native
     suggestedQuote: 345
   }).clientReplyUrl);
   assert.match(automaticQuoteDraft.searchParams.get("body"), /Quote: \$345/);
+});
+
+test("internal quote email uses the signed formatted-draft link when available", () => {
+  const email = quoteReadyEmail({
+    recordId: "rec123",
+    clientName: "Alex",
+    clientEmail: "client@example.com",
+    propertyAddress: "123 Main St",
+    service: "Quick Quote",
+    clientDraftUrl: "https://master.floorplandrawings.com/api/email/client-draft?token=test-token"
+  });
+  assert.match(email.html, /Draft Reply on Desktop/);
+  assert.match(email.html, /Draft Reply on iPhone/);
+  assert.match(email.html, /client-draft%3Ftoken=test-token|client-draft\?token=test-token/);
+  assert.match(email.html, /Creates a formatted Gmail draft/);
 });
 
 test("approved client quote can include appointment options", () => {
@@ -207,7 +222,7 @@ test("Gmail intake notification can link back to the source thread", () => {
   assert.match(email.text, /Gmail thread:/);
   assert.equal(email.replyTo, undefined);
   assert.match(email.clientReplyUrl, /^https:\/\/mail\.google\.com\/mail\/u\/0\/\?/);
-  assert.match(email.html, /Draft reply to client/);
+  assert.match(email.html, /Draft Reply on Desktop/);
 });
 
 test("new requests and quote-ready emails share the canonical review canvas", () => {

@@ -1,6 +1,6 @@
 const crypto = require("node:crypto");
 const { normalizeAddress } = require("./calendar-sync");
-const { ensurePropertyLinks } = require("./property-links");
+const { buildAerialFallbackLink, buildZimasAddressLink, ensurePropertyLinks } = require("./property-links");
 
 function clean(value) {
   return value === undefined || value === null ? "" : String(value).trim();
@@ -113,11 +113,19 @@ function patchMissingGmailFields(record, incoming) {
   return patch;
 }
 
+function isGeneratedPropertyFallback(key, value, address) {
+  const current = clean(value);
+  const property = clean(address);
+  return (key === "ZIMAS Link" && current === buildZimasAddressLink(property))
+    || ((key === "Aerial Map URL" || key === "Satellite Photo Link") && current === buildAerialFallbackLink(property));
+}
+
 module.exports = {
   findGmailAirtableMatch,
   gmailAirtableFields,
   gmailAirtableKey,
   gmailJobId,
+  isGeneratedPropertyFallback,
   normalizeThreadId,
   normalizedPropertyKey,
   patchMissingGmailFields

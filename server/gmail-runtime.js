@@ -22,6 +22,11 @@ function isGmailConfigured(env = process.env) {
   return Boolean(config.intakeLabelId && ((config.clientId && config.clientSecret && config.refreshToken) || config.accessToken));
 }
 
+function isGmailDraftConfigured(env = process.env) {
+  const config = gmailConfig(env);
+  return Boolean((config.clientId && config.clientSecret && config.refreshToken) || config.accessToken);
+}
+
 function decodeBase64Url(value) {
   if (!value) return "";
   return Buffer.from(String(value).replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
@@ -198,6 +203,12 @@ function createGmailClient({ env = process.env, fetchImpl = fetch } = {}) {
     },
     async getMessage(id) { if (!clean(id)) throw new Error("A Gmail message ID is required"); return api(`/messages/${encodeURIComponent(id)}?format=full`); },
     async getThread(id) { if (!clean(id)) throw new Error("A Gmail thread ID is required"); return api(`/threads/${encodeURIComponent(id)}?format=full`); },
+    async createDraft({ raw, threadId = "" } = {}) {
+      if (!clean(raw)) throw new Error("A raw Gmail draft message is required");
+      const message = { raw: clean(raw) };
+      if (clean(threadId)) message.threadId = clean(threadId);
+      return api("/drafts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message }) });
+    },
     async modifyLabels(id, { addLabelIds = [], removeLabelIds = [] } = {}) {
       return api(`/messages/${encodeURIComponent(id)}/modify`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addLabelIds, removeLabelIds }) });
     }
@@ -219,4 +230,4 @@ async function processIntakeMessages({ client, onMessage, store = createMemoryId
   return { processed, skipped, nextPageToken: listed.nextPageToken || "" };
 }
 
-module.exports = { addressParts, classifyContacts, collectAttachmentNames, createGmailClient, createMemoryIdempotencyStore, extractClientName, extractPropertyAddress, gmailConfig, isGmailConfigured, isLikelyFloorPlanIntake, parseGmailMessage, processIntakeMessages };
+module.exports = { addressParts, classifyContacts, collectAttachmentNames, createGmailClient, createMemoryIdempotencyStore, extractClientName, extractPropertyAddress, gmailConfig, isGmailConfigured, isGmailDraftConfigured, isLikelyFloorPlanIntake, parseGmailMessage, processIntakeMessages };

@@ -48,6 +48,7 @@ function mapJob(record, options = {}) {
     normalizedPropertyKey: first(fields, ["Normalized Property Key"]),
     sourceChannels: first(fields, ["Source Channels"]),
     clientNotes: first(fields, ["Client Notes"]),
+    originalRequest: first(fields, ["Original Request", "Client Message", "Client Request"]),
     service: first(fields, ["Drawing Style", "Service Requested", "Service"]),
     scope: first(fields, ["Scope", "Unit / Suite / Scope Detail"]),
     workflow: first(fields, ["Website Workflow", "Workflow", "Request Type"]) || "Quick Quote",
@@ -64,8 +65,12 @@ function mapJob(record, options = {}) {
     zillowSqFt: first(fields, ["Zillow Sq Ft", "Zillow Square Feet", "Zillow Building Sq Ft"]),
     realtorSqFt: first(fields, ["Realtor Sq Ft", "Realtor.com Sq Ft", "Realtor Square Feet"]),
     homesSqFt: first(fields, ["Homes.com Sq Ft", "Homes Sq Ft"]),
-    suggestedQuote: first(fields, ["Suggested Quote", "Quote Amount"]),
-    finalQuote: first(fields, ["Quote Amount", "Final Quote Preview", "Suggested Quote"]),
+    suggestedQuote: first(fields, ["Suggested Quote", "Quote Estimate", "Quote Amount"]),
+    // Keep the client-facing amount separate from the internal suggestion. A
+    // clean reply draft may use this value, while never leaking quote notes or
+    // a merely suggested amount to the client by accident.
+    clientFacingQuote: first(fields, ["Client Quote", "Presented Quote", "Approved Quote", "Quote Amount", "Final Quote Preview"]),
+    finalQuote: first(fields, ["Quote Amount", "Final Quote Preview", "Approved Quote", "Client Quote"]),
     quoteNotes: first(fields, ["Quote Calculation Notes", "Quote Notes"]),
     followUpDate: first(fields, ["Follow-Up Date", "Follow Up Date"]),
     quoteSentDate: first(fields, ["Quote Sent Date"]),

@@ -2,9 +2,10 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   findGmailAirtableMatch,
-  gmailAirtableFields,
   gmailAirtableKey,
   gmailJobId,
+  gmailAirtableFields,
+  isGeneratedPropertyFallback,
   normalizedPropertyKey,
   patchMissingGmailFields
 } = require("./gmail-airtable-sync");
@@ -34,4 +35,12 @@ test("fills only missing business fields and always refreshes source identifiers
   assert.equal(patch["Gmail Thread ID"], "thread-1");
   assert.equal(patch["Source Channels"], "calendar, gmail");
   assert.equal(patch["Client Email"], "client@example.com");
+});
+
+test("recognizes generated Gmail property fallbacks as replaceable asset placeholders", () => {
+  const address = "1917 Eden Ave, Pasadena, CA 91103";
+  const fields = gmailAirtableFields({ propertyAddress: address, threadId: "thread-assets", id: "message-assets", subject: "Floor plans", text: "Please quote this address" });
+  assert.equal(isGeneratedPropertyFallback("ZIMAS Link", fields["ZIMAS Link"], address), true);
+  assert.equal(isGeneratedPropertyFallback("Aerial Map URL", fields["Aerial Map URL"], address), true);
+  assert.equal(isGeneratedPropertyFallback("Aerial Map URL", "https://v5.airtableusercontent.com/real.jpg", address), false);
 });

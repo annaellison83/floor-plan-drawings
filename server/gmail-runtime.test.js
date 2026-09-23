@@ -70,6 +70,20 @@ test("Gmail client can read a complete thread for label reconciliation", async (
   assert.match(calls[0].url, /threads\/t1\?format=full/);
 });
 
+test("Gmail client can create a formatted draft", async () => {
+  const calls = [];
+  const fakeFetch = async (url, options) => {
+    calls.push({ url, options });
+    return { ok: true, json: async () => ({ id: "draft-1", message: { id: "message-1" } }) };
+  };
+  const client = createGmailClient({ fetchImpl: fakeFetch, env: { GMAIL_ACCESS_TOKEN: "access", GMAIL_INTAKE_LABEL_ID: "Label_29" } });
+  const draft = await client.createDraft({ raw: "encoded-html-message", threadId: "thread-1" });
+  assert.equal(draft.id, "draft-1");
+  assert.match(calls[0].url, /\/drafts$/);
+  assert.equal(calls[0].options.method, "POST");
+  assert.deepEqual(JSON.parse(calls[0].options.body), { message: { raw: "encoded-html-message", threadId: "thread-1" } });
+});
+
 test("processIntakeMessages is idempotent and marks only after hook succeeds", async () => {
   const calls = [], client = { listMessages: async () => ({ messages: [{ id: "m1" }, { id: "m2" }, { id: "m1" }] }), getMessage: async (id) => ({ id, threadId: `t-${id}`, payload: { headers: [], body: {} } }) };
   const store = { seen: new Set(["gmail:m2"]), has: async (key) => store.seen.has(key), mark: async (key) => store.seen.add(key) };
