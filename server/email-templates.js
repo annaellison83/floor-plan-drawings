@@ -49,7 +49,12 @@ function clientReplyDraft(job) {
   const name = text(job.clientName, "there");
   const address = text(job.propertyAddress, "the property");
   const squareFootage = resolveSquareFootage(job);
-  const quote = clientFacingQuote(job);
+  // Seed the client draft with the automatic quote when Anna has not entered
+  // an approved/presented amount yet. She can edit the number before sending.
+  const quote = clientFacingQuote(job) || (() => {
+    const calculated = quotePricing(job).finalPrice;
+    return calculated === null ? "" : money(calculated);
+  })();
   const details = [job.service && `Service: ${text(job.service)}`, job.scope && `Scope: ${text(job.scope)}`, `Property size: ${squareFootage.label}`, quote ? `Quote: ${quote}` : "Quote: [Add the amount Anna wants to present]"];
   const clientNote = text(job.clientNotes || job.originalRequest, "").slice(0, 2400);
   return `Hi ${name},\n\nThanks for reaching out about ${address}.\n\n${details.join("\n")}\n${clientNote ? `\nYour note: ${clientNote}\n` : ""}\n[Add or edit any message before sending.]\n\nBest,\nAnna`;
@@ -127,7 +132,7 @@ function canonicalReviewEmail(job, options = {}) {
   const address = text(job.propertyAddress);
   const pricing = quotePricing(job);
   const size = resolveSquareFootage(job);
-  const subject = `${text(options.label, "QUOTE READY")} | ${address}`;
+  const subject = `FloorPlanDrawings | ${text(options.label, "Quote ready")} | ${address}`;
   const maps = safeUrl(job.propertyMapUrl || job.googleMapsLink)
     || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
   const aerial = safeUrl(job.emailAerialUrl || job.aerialAttachmentUrl || job.mapUrl);
@@ -139,8 +144,8 @@ function canonicalReviewEmail(job, options = {}) {
   const record = safeUrl(job.recordUrl);
   const thread = safeUrl(job.gmailThreadUrl);
   const replyEmail = normalizedEmail(job.clientEmail);
-  const clientReplyUrl = gmailComposeUrl(replyEmail, `Re: ${subject}`, clientReplyDraft(job));
-  const row = (label, value) => value ? `<tr><td valign="top" style="width:100px;padding:4px 12px 4px 0;color:#53635c;font-size:14px;line-height:20px;">${escapeHtml(label)}</td><td style="padding:4px 0;font-size:14px;line-height:20px;overflow-wrap:anywhere;white-space:pre-line;">${escapeHtml(value)}</td></tr>` : "";
+  const clientReplyUrl = gmailComposeUrl(replyEmail, `FloorPlanDrawings quote | ${address}`, clientReplyDraft(job));
+  const row = (label, value, emphasize = false) => value ? `<tr><td valign="top" style="width:100px;padding:4px 12px 4px 0;color:#53635c;font-size:14px;line-height:20px;${emphasize ? "font-weight:700;" : ""}">${escapeHtml(label)}</td><td style="padding:4px 0;font-size:14px;line-height:20px;overflow-wrap:anywhere;white-space:pre-line;${emphasize ? "font-weight:600;" : ""}">${escapeHtml(value)}</td></tr>` : "";
   const link = (label, url) => url ? `<a href="${escapeHtml(url)}" style="color:#0b57d0;text-decoration:underline;">${escapeHtml(label)}</a>` : "";
   const image = (label, source, destination) => {
     const valid = source && !/earth\.google\.com|google\.com\/maps\/search/i.test(source);
@@ -148,12 +153,12 @@ function canonicalReviewEmail(job, options = {}) {
   };
   const clientNote = text(job.clientNotes || job.originalRequest, "");
   const details = [
-    row("Client", [job.clientName, job.clientEmail, job.clientPhone].filter(Boolean).join(" · ")),
-    row("Service", [job.service, job.scope, job.tourRequested && `3D tour: ${job.tourRequested}`].filter(Boolean).join(" · ")),
-    row("Size / zone", `${size.label} · ${size.verified ? "Confirmed" : "Needs verification"} · ${pricing.zoneLabel}`),
-    row("Suggested quote", pricing.finalPrice === null ? "Needs review" : money(pricing.finalPrice)),
+    row("Client", [job.clientName, job.clientEmail, job.clientPhone].filter(Boolean).join(" · "), true),
+    row("Service", [job.service, job.scope, job.tourRequested && `3D tour: ${job.tourRequested}`].filter(Boolean).join(" · "), true),
+    row("Size / zone", `${size.label} · ${size.verified ? "Confirmed" : "Needs verification"} · ${pricing.zoneLabel}`, true),
+    row("Suggested quote", pricing.finalPrice === null ? "Needs review" : money(pricing.finalPrice), true),
     row("Client note", clientNote),
-    row("Notes", job.quoteNotes)
+    row("Notes", job.quoteNotes, true)
   ].join("");
   const sizeLinks = size.verified ? "" : `<div style="font-size:12px;line-height:18px;margin:5px 0;">Verify size: ${sizeResearchLinks(address).map(item => link(item.label, item.url)).join(" · ")}</div>`;
   const actions = [

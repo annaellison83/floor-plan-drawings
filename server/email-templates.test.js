@@ -16,7 +16,7 @@ test("quote ready template escapes all dynamic HTML", () => {
   assert.match(rendered.html, /&lt;script&gt;/);
   assert.doesNotMatch(rendered.html, /a\.jpg" style=/);
   assert.match(rendered.html, /token=abc&amp;record=123/);
-  assert.equal(rendered.subject, 'QUOTE READY | 349 Mount Washington <script>alert("x")</script>');
+  assert.equal(rendered.subject, 'FloorPlanDrawings | QUOTE READY | 349 Mount Washington <script>alert("x")</script>');
   assert.doesNotMatch(rendered.subject, /Review:/);
 });
 
@@ -59,13 +59,26 @@ test("internal quote emails provide a clean client draft without changing native
   assert.match(email.clientReplyUrl, /^https:\/\/mail\.google\.com\/mail\/u\/0\/\?/);
   assert.match(email.html, /Draft reply to client/);
   assert.match(email.html, /does not quote this internal email/);
+  assert.match(email.html, /font-weight:700;">Client/);
+  assert.match(email.html, /font-weight:700;">Service/);
+  assert.match(email.html, /font-weight:700;">Size \/ zone/);
+  assert.match(email.html, /font-weight:700;">Suggested quote/);
+  assert.match(email.html, /font-weight:700;">Notes/);
   const draft = new URL(email.clientReplyUrl);
   assert.equal(draft.searchParams.get("to"), "client@example.com");
+  assert.equal(draft.searchParams.get("su"), "FloorPlanDrawings quote | 123 Main St");
   assert.match(draft.searchParams.get("body"), /Property size: 1,343 sq ft/);
   assert.match(draft.searchParams.get("body"), /Quote: \$345/);
   assert.match(draft.searchParams.get("body"), /Please include the detached garage/);
   assert.doesNotMatch(draft.searchParams.get("body"), /Internal pricing note|Suggested quote|Zone/);
   assert.match(email.text, /Draft a clean client reply:/);
+
+  const automaticQuoteDraft = new URL(quoteReadyEmail({
+    propertyAddress: "456 Oak St",
+    clientEmail: "client@example.com",
+    suggestedQuote: 345
+  }).clientReplyUrl);
+  assert.match(automaticQuoteDraft.searchParams.get("body"), /Quote: \$345/);
 });
 
 test("approved client quote can include appointment options", () => {
@@ -221,8 +234,8 @@ test("new requests and quote-ready emails share the canonical review canvas", ()
     assert.match(email.html, /@media only screen and \(max-width:640px\)/);
   }
   assert.ok(quote.html.indexOf('class="reply"') > quote.html.indexOf('class="property-images"'));
-  assert.equal(quote.subject.startsWith("QUOTE READY"), true);
-  assert.equal(request.subject.startsWith("NEW REQUEST"), true);
+  assert.equal(quote.subject.startsWith("FloorPlanDrawings | QUOTE READY"), true);
+  assert.equal(request.subject.startsWith("FloorPlanDrawings | NEW REQUEST"), true);
   assert.equal(quote.html.replace(/QUOTE READY/g, "REVIEW").includes("NEW REQUEST"), false);
   assert.match(request.html, /Eric Greenburg/);
 });
