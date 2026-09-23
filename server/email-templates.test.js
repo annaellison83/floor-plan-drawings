@@ -57,8 +57,12 @@ test("internal quote emails provide a clean client draft without changing native
   });
   assert.equal(email.replyTo, undefined);
   assert.match(email.clientReplyUrl, /^https:\/\/mail\.google\.com\/mail\/u\/0\/\?/);
+  assert.match(email.clientReplyAppUrl, /^googlegmail:\/\/\/co\?/);
+  assert.match(email.clientReplyMailtoUrl, /^mailto:client@example\.com\?/);
   assert.match(email.html, /Draft reply to client/);
   assert.match(email.html, /does not quote this internal email/);
+  assert.match(email.html, /Open in Gmail app/);
+  assert.match(email.html, /Use Mail composer/);
   assert.match(email.html, /font-weight:700;">Client/);
   assert.match(email.html, /font-weight:700;">Service/);
   assert.match(email.html, /font-weight:700;">Size \/ zone/);

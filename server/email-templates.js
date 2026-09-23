@@ -30,6 +30,15 @@ function gmailComposeUrl(email, subject = "", body = "") {
   return `https://mail.google.com/mail/u/0/?${params.toString()}`;
 }
 
+function gmailAppComposeUrl(email, subject = "", body = "") {
+  const address = normalizedEmail(email);
+  if (!address) return "";
+  const params = new URLSearchParams({ to: address });
+  if (subject) params.set("subject", subject);
+  if (body) params.set("body", body);
+  return `googlegmail:///co?${params.toString()}`;
+}
+
 function clientReplyPanel(email, subject, body) {
   const address = normalizedEmail(email);
   const href = gmailComposeUrl(address, subject, body) || mailtoUrl(address, subject, body);
@@ -144,7 +153,11 @@ function canonicalReviewEmail(job, options = {}) {
   const record = safeUrl(job.recordUrl);
   const thread = safeUrl(job.gmailThreadUrl);
   const replyEmail = normalizedEmail(job.clientEmail);
-  const clientReplyUrl = gmailComposeUrl(replyEmail, `FloorPlanDrawings quote | ${address}`, clientReplyDraft(job));
+  const clientReplySubject = `FloorPlanDrawings quote | ${address}`;
+  const clientReplyBody = clientReplyDraft(job);
+  const clientReplyUrl = gmailComposeUrl(replyEmail, clientReplySubject, clientReplyBody);
+  const clientReplyAppUrl = gmailAppComposeUrl(replyEmail, clientReplySubject, clientReplyBody);
+  const clientReplyMailtoUrl = mailtoUrl(replyEmail, clientReplySubject, clientReplyBody);
   const row = (label, value, emphasize = false) => value ? `<tr><td valign="top" style="width:100px;padding:4px 12px 4px 0;color:#53635c;font-size:14px;line-height:20px;${emphasize ? "font-weight:700;" : ""}">${escapeHtml(label)}</td><td style="padding:4px 0;font-size:14px;line-height:20px;overflow-wrap:anywhere;white-space:pre-line;${emphasize ? "font-weight:600;" : ""}">${escapeHtml(value)}</td></tr>` : "";
   const link = (label, url) => url ? `<a href="${escapeHtml(url)}" style="color:#0b57d0;text-decoration:underline;">${escapeHtml(label)}</a>` : "";
   const image = (label, source, destination) => {
@@ -167,14 +180,14 @@ function canonicalReviewEmail(job, options = {}) {
     link("Open Airtable record", record),
     link("Open Gmail thread", thread)
   ].filter(Boolean).join(" &nbsp;·&nbsp; ");
-  const reply = clientReplyUrl ? `<div class="reply" style="margin-top:12px;padding-top:12px;border-top:1px solid #ddd7ca;"><a href="${escapeHtml(clientReplyUrl)}" style="display:inline-block;padding:11px 18px;border-radius:8px;background:#173f36;color:#fff!important;font-size:14px;font-weight:700;text-decoration:none;">Draft reply to client</a><div style="margin-top:5px;font-size:12px;line-height:17px;color:#53635c;">To: ${escapeHtml(replyEmail)} · Opens a fresh draft; does not quote this internal email.</div></div>` : "";
+  const reply = clientReplyUrl ? `<div class="reply" style="margin-top:12px;padding-top:12px;border-top:1px solid #ddd7ca;"><a href="${escapeHtml(clientReplyUrl)}" style="display:inline-block;padding:11px 18px;border-radius:8px;background:#173f36;color:#fff!important;font-size:14px;font-weight:700;text-decoration:none;">Draft reply to client</a><div style="margin-top:5px;font-size:12px;line-height:17px;color:#53635c;">To: ${escapeHtml(replyEmail)} · Opens a fresh draft; does not quote this internal email.</div><div style="margin-top:6px;font-size:12px;line-height:17px;color:#53635c;">On iPhone: <a href="${escapeHtml(clientReplyAppUrl)}" style="color:#0b57d0;text-decoration:underline;font-weight:700;">Open in Gmail app</a> · <a href="${escapeHtml(clientReplyMailtoUrl)}" style="color:#0b57d0;text-decoration:underline;">Use Mail composer</a></div></div>` : "";
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>
 body{margin:0;padding:0;background:#f3f1eb;color:#22332e;font-family:Arial,Helvetica,sans-serif}
 .canvas{width:100%;max-width:1100px;margin:0 auto}.pad{padding:12px}.content{padding:18px;background:#fbf8f1;border:1px solid #ddd7ca;border-radius:12px}.address{margin:0;font-size:23px;line-height:29px}.property-head{padding:12px 14px;background:#b8c9ae;border-radius:8px;margin-bottom:8px}.address a{color:#0b57d0;text-decoration:underline}
 @media only screen and (max-width:640px){.pad{padding:6px!important}.content{padding:10px!important}.address{font-size:19px!important;line-height:25px!important}}
 </style></head><body><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td class="pad"><table role="presentation" class="canvas" width="100%" cellspacing="0" cellpadding="0"><tr><td class="content"><div class="property-head"><h1 class="address">${link(address, maps)}</h1></div><table role="presentation" width="100%" cellspacing="0" cellpadding="0">${details}</table>${sizeLinks}<table role="presentation" class="property-images" width="100%" cellspacing="0" cellpadding="0" style="table-layout:fixed;margin-top:10px;"><tr>${image("Aerial view", aerial, aerialLink)}${image("Google Maps overview", context, maps)}</tr></table><div style="text-align:center;font-size:12px;line-height:20px;padding:6px 0;">${[link("Google Maps ↗", maps), link("Aerial view ↗", aerialLink), link("ZIMAS ↗", zimas)].filter(Boolean).join(" &nbsp;·&nbsp; ")}</div>${actions ? `<div style="font-size:13px;line-height:23px;">${actions}</div>` : ""}${reply}</td></tr></table></td></tr></table></body></html>`;
   const plainText = [address, `Client: ${[job.clientName, job.clientEmail, job.clientPhone].filter(Boolean).join(" · ")}`, `Service: ${text(job.service)}`, job.scope && `Scope: ${job.scope}`, `Size: ${size.label}; ${size.verified ? "Confirmed" : "Needs verification"}`, `Quote zone: ${pricing.zoneLabel}`, `Suggested quote: ${pricing.finalPrice === null ? "Needs review" : money(pricing.finalPrice)}`, clientNote && `Client note: ${clientNote}`, job.quoteNotes && `Notes: ${job.quoteNotes}`, `Google Maps: ${maps}`, `Aerial: ${aerialLink}`, zimas && `ZIMAS: ${zimas}`, approval && `Review and approve: ${approval}`, availability && `Check availability and send appointment options: ${availability}`, record && `Airtable record: ${record}`, thread && `Gmail thread: ${thread}`, clientReplyUrl && `Draft a clean client reply: ${clientReplyUrl}`].filter(Boolean).join("\n\n");
-  return { subject, html, text: plainText, clientReplyUrl };
+  return { subject, html, text: plainText, clientReplyUrl, clientReplyAppUrl, clientReplyMailtoUrl };
 }
 
 function quoteReadyEmail(job) {
