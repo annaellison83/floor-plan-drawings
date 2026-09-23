@@ -57,7 +57,7 @@ test("internal quote emails provide a clean client draft without changing native
   });
   assert.equal(email.replyTo, undefined);
   assert.match(email.clientReplyUrl, /^https:\/\/mail\.google\.com\/mail\/u\/0\/\?/);
-  assert.match(email.html, /Draft a clean client reply/);
+  assert.match(email.html, /Draft reply to client/);
   assert.match(email.html, /does not quote this internal email/);
   const draft = new URL(email.clientReplyUrl);
   assert.equal(draft.searchParams.get("to"), "client@example.com");
@@ -113,15 +113,14 @@ test("quote ready template is wide on desktop and stacks on mobile", () => {
   });
   assert.match(html, /max-width:1100px/);
   assert.match(html, /@media only screen and \(max-width:640px\)/);
-  assert.match(html, /\.summary tr,\.detail-cell\{display:block/);
   assert.match(html, /text-align:center/);
   assert.match(html, /max-width:100%/);
-  assert.match(html, /class="detail-cell"[^>]*><div class="detail">/);
+  assert.match(html, /class="property-images"/);
   assert.match(html, /class="property-head"/);
   assert.match(html, /https:\/\/www\.google\.com\/maps\/search/);
   assert.match(html, /color:#0b57d0/);
   assert.doesNotMatch(html, /class="badge"/);
-  assert.match(html, /class="eyebrow section-title">QUOTE READY/);
+  assert.doesNotMatch(html, />QUOTE READY<|Review this quote|next actions below/);
 });
 
 test("quote ready email exposes the separate availability proposal action", () => {
@@ -131,8 +130,6 @@ test("quote ready email exposes the separate availability proposal action", () =
     availabilityReviewUrl: "https://floor-plan-drawings.onrender.com/api/scheduling/proposal/start?recordId=rec123&token=abc"
   });
   assert.match(html, /Check availability &amp; send options/);
-  assert.match(html, /class="availability"/);
-  assert.match(html, /Optional appointment availability/);
   assert.match(text, /Check availability and send appointment options/);
 });
 
@@ -193,7 +190,7 @@ test("Gmail intake notification can link back to the source thread", () => {
   assert.match(email.text, /Gmail thread:/);
   assert.equal(email.replyTo, undefined);
   assert.match(email.clientReplyUrl, /^https:\/\/mail\.google\.com\/mail\/u\/0\/\?/);
-  assert.match(email.html, /Draft a clean client reply/);
+  assert.match(email.html, /Draft reply to client/);
 });
 
 test("new requests and quote-ready emails share the canonical review canvas", () => {
@@ -218,13 +215,14 @@ test("new requests and quote-ready emails share the canonical review canvas", ()
     assert.match(email.html, /class="property-head"/);
     assert.match(email.html, /Google Maps/);
     assert.match(email.html, /ZIMAS/);
-    assert.match(email.html, /Property close-up/);
-    assert.match(email.html, /Greater LA context/);
+    assert.match(email.html, /Aerial view/);
+    assert.match(email.html, /Google Maps overview/);
     assert.match(email.html, /max-width:1100px/);
     assert.match(email.html, /@media only screen and \(max-width:640px\)/);
   }
-  assert.match(quote.html, /QUOTE READY/);
-  assert.match(request.html, /NEW REQUEST/);
+  assert.ok(quote.html.indexOf('class="reply"') > quote.html.indexOf('class="property-images"'));
+  assert.equal(quote.subject.startsWith("QUOTE READY"), true);
+  assert.equal(request.subject.startsWith("NEW REQUEST"), true);
   assert.equal(quote.html.replace(/QUOTE READY/g, "REVIEW").includes("NEW REQUEST"), false);
   assert.match(request.html, /Eric Greenburg/);
 });
