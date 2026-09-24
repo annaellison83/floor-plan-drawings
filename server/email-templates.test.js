@@ -31,6 +31,9 @@ test("client quote email contains one approved amount and escapes client data", 
   });
   assert.equal(email.subject, "Floor plan quote for 123 Main St");
   assert.match(email.html, /We charge by the square foot/);
+  assert.match(email.html, /We received your request for a floor plan/);
+  assert.match(email.html, /FloorPlanDrawings/);
+  assert.match(email.html, /https:\/\/floorplandrawings\.com/);
   assert.match(email.html, /approximately 2,400 sq ft/);
   assert.match(email.html, /\$365/);
   assert.doesNotMatch(email.html, /<script>/);
@@ -95,6 +98,8 @@ test("internal quote emails provide a clean client draft without changing native
   assert.match(draft.searchParams.get("body"), /approximately 1,343 sq ft/);
   assert.match(draft.searchParams.get("body"), /Color floor plan: \$345/);
   assert.match(draft.searchParams.get("body"), /Regarding your note: Please include the detached garage/);
+  assert.match(draft.searchParams.get("body"), /We received your request for a floor plan/);
+  assert.match(draft.searchParams.get("body"), /https:\/\/floorplandrawings\.com/);
   assert.doesNotMatch(draft.searchParams.get("body"), /Internal pricing note|Suggested quote|Zone/);
   assert.match(email.text, /Draft a clean client reply:/);
 
