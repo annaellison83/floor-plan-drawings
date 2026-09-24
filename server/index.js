@@ -2667,15 +2667,11 @@ async function route(req, res) {
 
     try {
       const sampleJob = await buildTestQuote();
-      let previewDraft = null;
-      if (isGmailDraftConfigured()) {
-        try {
-          previewDraft = await createFormattedClientDraft({ ...sampleJob, recordId: `test-${crypto.randomUUID()}` });
-        } catch (error) {
-          console.warn(`Formatted test draft unavailable: ${error.message}`);
-        }
-      }
-      const sample = quoteReadyEmail({ ...(await prepareEmailAssets(sampleJob)), ...(previewDraft ? { clientDraftUrl: previewDraft.url } : {}) });
+      // A test message may be opened from a different Gmail account than the
+      // connected Anna account. Do not embed an Anna-account draft-search URL
+      // in that message; use the account-neutral desktop/mobile compose links
+      // rendered by the canonical template instead.
+      const sample = quoteReadyEmail(await prepareEmailAssets(sampleJob));
       const deliveries = [];
       for (const target of recipients) {
         deliveries.push({ recipient: target, ...(await sendMail({
@@ -2685,7 +2681,7 @@ async function route(req, res) {
           text: sample.text
         })) });
       }
-      return json(res, 200, { ok: true, test: true, recipients, formattedDraft: Boolean(previewDraft), deliveries });
+      return json(res, 200, { ok: true, test: true, recipients, formattedDraft: false, deliveries });
     } catch (error) {
       return json(res, 502, { error: "Test email delivery failed", detail: error.message });
     }

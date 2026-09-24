@@ -39,7 +39,9 @@ function gmailAppComposeUrl(email, subject = "", body = "") {
   const params = new URLSearchParams({ to: address });
   if (subject) params.set("subject", subject);
   if (body) params.set("body", body);
-  return `googlegmail:///co?${params.toString()}`;
+  // Gmail's iOS custom URL scheme uses `co` as the host. The previous
+  // triple-slash form is treated as an unknown path by current Gmail builds.
+  return `googlegmail://co?${params.toString()}`;
 }
 
 function clientReplyPanel(email, subject, body) {
@@ -224,7 +226,7 @@ function canonicalReviewEmail(job, options = {}) {
   ].filter(Boolean).join(" &nbsp;·&nbsp; ");
   const draftButtonStyle = "display:inline-block;padding:11px 18px;margin:0 8px 8px 0;border-radius:8px;background:#173f36;color:#fff!important;font-size:14px;font-weight:700;text-decoration:none;";
   const reply = formattedDraftUrl
-    ? `<div class="reply" style="margin-top:12px;padding-top:12px;border-top:1px solid #ddd7ca;"><a href="${escapeHtml(formattedDraftUrl)}" style="${draftButtonStyle}">Draft Reply on Desktop</a><a href="${escapeHtml(formattedDraftUrl)}" style="${draftButtonStyle}">Draft Reply on iPhone</a><div style="margin-top:2px;font-size:12px;line-height:17px;color:#53635c;">To: ${escapeHtml(replyEmail)} · Both buttons open the saved, formatted Gmail draft.</div></div>`
+    ? `<div class="reply" style="margin-top:12px;padding-top:12px;border-top:1px solid #ddd7ca;"><a href="${escapeHtml(formattedDraftUrl)}" style="${draftButtonStyle}">Draft Reply on Desktop</a><a href="${escapeHtml(clientReplyAppUrl)}" style="${draftButtonStyle}">Draft Reply on iPhone</a><div style="margin-top:2px;font-size:12px;line-height:17px;color:#53635c;">To: ${escapeHtml(replyEmail)} · Desktop opens the saved formatted draft; iPhone opens a clean Gmail compose.</div></div>`
     : clientReplyUrl ? `<div class="reply" style="margin-top:12px;padding-top:12px;border-top:1px solid #ddd7ca;"><a href="${escapeHtml(clientReplyUrl)}" style="${draftButtonStyle}">Draft Reply on Desktop</a><a href="${escapeHtml(clientReplyMailtoUrl)}" style="${draftButtonStyle}">Draft Reply on iPhone</a><div style="margin-top:2px;font-size:12px;line-height:17px;color:#53635c;">To: ${escapeHtml(replyEmail)} · The fallback buttons open a new draft with the client-safe details.</div></div>` : "";
   const pricingNote = [
     Number.isFinite(pricing.basePrice) && `Base service ${money(pricing.basePrice)}`,
