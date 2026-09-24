@@ -68,7 +68,7 @@ test("internal quote emails provide a clean client draft without changing native
   assert.match(email.html, /font-weight:700;">Client/);
   assert.match(email.html, /font-weight:700;">Service/);
   assert.match(email.html, /font-weight:700;">Size \/ zone/);
-  assert.match(email.html, /font-weight:700;">Suggested quote/);
+  assert.match(email.html, /font-weight:700;">Auto quote/);
   assert.match(email.html, /font-weight:700;">Notes/);
   const draft = new URL(email.clientReplyUrl);
   assert.equal(draft.searchParams.get("to"), "client@example.com");
@@ -157,6 +157,19 @@ test("quote ready template is wide on desktop and stacks on mobile", () => {
   assert.match(html, /color:#0b57d0/);
   assert.doesNotMatch(html, /class="badge"/);
   assert.doesNotMatch(html, />QUOTE READY<|Review this quote|next actions below/);
+});
+
+test("canonical quote email uses an inline aerial CID when a cached image is ready", () => {
+  const { html } = quoteReadyEmail({
+    propertyAddress: "123 Main St, Los Angeles, CA",
+    suggestedQuote: 345,
+    emailAerialCid: "fpd-aerial-test@floorplandrawings.com",
+    emailAerialLink: "https://floor-plan-drawings.onrender.com/assets/property-aerial?address=123"
+  });
+  assert.match(html, /src="cid:fpd-aerial-test@floorplandrawings\.com"/);
+  assert.match(html, /href="https:\/\/floor-plan-drawings\.onrender\.com\/assets\/property-aerial/);
+  assert.match(html, />Auto quote</);
+  assert.doesNotMatch(html, />Suggested quote</);
 });
 
 test("quote ready email exposes the separate availability proposal action", () => {

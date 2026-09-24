@@ -37,6 +37,11 @@ function assetFilename(url) {
   return `aerial-${digest}.jpg`;
 }
 
+function assetContentId(url) {
+  const digest = crypto.createHash("sha256").update(url).digest("hex");
+  return `fpd-aerial-${digest}@floorplandrawings.com`;
+}
+
 function assetUrlFor(url, env = process.env) {
   return `${publicBaseUrl(env)}/assets/email/${assetFilename(url)}`;
 }
@@ -97,6 +102,8 @@ async function prepareEmailAssets(job = {}, options = {}) {
         // leaving old emails pointed at a missing ephemeral file.
         emailAerialUrl: stableUrl,
         emailAerialLink: stableUrl,
+        emailAerialPath: cached.filePath,
+        emailAerialCid: assetContentId(sourceUrl),
         emailAssetSource: sourceUrl,
         emailAssetError: ""
       };
@@ -126,6 +133,8 @@ async function prepareEmailAssets(job = {}, options = {}) {
         ...job,
         emailAerialUrl: stableUrl,
         emailAerialLink: stableUrl,
+        emailAerialPath: cached.filePath,
+        emailAerialCid: assetContentId(freshUrl),
         emailAssetSource: freshUrl,
         emailAssetError: failures.join("; ")
       };
@@ -139,6 +148,8 @@ async function prepareEmailAssets(job = {}, options = {}) {
     emailAerialLink: job.propertyAddress
       ? `https://earth.google.com/web/search/${encodeURIComponent(clean(job.propertyAddress))}`
       : "",
+    emailAerialPath: "",
+    emailAerialCid: "",
     emailAssetSource: "",
     emailAssetError: failures.join("; ")
   };
@@ -154,6 +165,7 @@ function readAsset(filename, env = process.env) {
 module.exports = {
   assetDirectory,
   assetFilename,
+  assetContentId,
   assetUrlFor,
   propertyAerialUrlFor,
   cacheRemoteImage,

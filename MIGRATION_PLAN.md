@@ -52,6 +52,11 @@ disabled as part of the preparatory work.
     disabled-by-default note-normalization preview that preserves Client Notes
     and proposes structured internal review flags before writing Quote
     Calculation Notes.
+15. Internal quote and new-request emails now attach the cached aerial image
+    inline for immediate Gmail display and call the automatic price **Auto
+    quote**. The separate appointment-confirmation workflow is paused because
+    its messages were adding inbox noise; reminders and the experimental
+    availability board remain independent flags.
 
 ## Execution order
 
@@ -71,9 +76,11 @@ disabled as part of the preparatory work.
    employee/time combinations, let the client choose through a signed link,
    re-check availability, and only then create a provisional hold. Quote
    approval and appointment selection remain separate actions.
-6. **Operational email parity.** Move follow-ups, reminders, client
-   confirmations, and communication logging to Render using the same guarded
-   sender and an explicit retry/failure record.
+6. **Operational email parity.** Move follow-ups, reminders, and communication
+   logging to Render using the same guarded sender and an explicit
+   retry/failure record. Keep client appointment confirmations paused until
+   Anna approves a replacement flow; do not re-enable the current noisy
+   confirmation sender.
 7. **Note normalization.** Have Anna review
    `/api/airtable/note-translation-preview`; enable
    `ENABLE_NOTE_TRANSLATION=true` only after the output is accepted. This

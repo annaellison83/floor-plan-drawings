@@ -5,6 +5,11 @@ Netlify remains the public intake website and Airtable remains the dashboard and
 source of truth. Render currently sends QUOTE READY, approved client quotes,
 NEW REQUEST, PROPERTY REVIEW NEEDED, and the daily FOLLOW-UP digest with
 idempotent Communication Log reservations. It does not create calendar events.
+Internal review emails use the compact quote layout, label the automatic price
+as **Auto quote**, and attach the cached aerial image inline so Gmail can display
+it without waiting on a remote image request. Appointment confirmation emails
+are intentionally disabled for now; reminders and the experimental availability
+board remain separately controlled.
 Client-note normalization is staged behind `ENABLE_NOTE_TRANSLATION=false` and
 must be reviewed through the read-only
 `GET /api/airtable/note-translation-preview` endpoint before enabling writes.
@@ -263,8 +268,11 @@ each change is durable (when `STATE_FILE` is mounted) and creates a
 
 Both require an explicit client recipient policy, reserve an idempotency key,
 update the project timeline, and send the styled client email through Render's
-primary/fallback SMTP path. `ENABLE_APPOINTMENT_CONFIRMATIONS` and
-`ENABLE_APPOINTMENT_REMINDERS` are false by default. When reminders are
+primary/fallback SMTP path. `ENABLE_APPOINTMENT_CONFIRMATIONS` is deliberately
+off for the current production workflow because the confirmation messages were
+creating inbox noise. Leave it unset or set it to `false`; do not turn it on
+until Anna approves a new confirmation design. `ENABLE_APPOINTMENT_REMINDERS`
+is false by default. When reminders are
 enabled, Render checks scheduled projects every `APPOINTMENT_REMINDER_POLL_MS`
 and sends one reminder in the 20–28 hour window before the stored appointment.
 

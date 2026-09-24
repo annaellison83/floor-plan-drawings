@@ -46,7 +46,9 @@ Updated: 2026-09-08
 - Current Render migration flags: NEW REQUEST, PROPERTY REVIEW, and FOLLOW-UP
   are live with per-workflow shadow flags false; QUOTE READY and approved
   CLIENT QUOTE remain live on Render; provisional holds and client scheduling
-  remain disabled. The matching Airtable sender automations are retained as a
+  remain disabled. Appointment confirmations are paused
+  (`ENABLE_APPOINTMENT_CONFIRMATIONS` unset/false) because the current
+  messages create inbox noise. The matching Airtable sender automations are retained as a
   reversible rollback path until Anna pauses them in Airtable's Automations UI.
 - Render FOLLOW-UP candidates are limited by `FOLLOW_UP_MAX_AGE_DAYS=90` so
   the historical 2024 rows cannot be revived during cutover. Airtable data was
@@ -64,6 +66,10 @@ accepts the message. Duplicate sends are blocked by both the Communication Log
 reservation and Render's delivery ledger.
 
 The approval page now saves edits with confirmation, records manually entered size as `Anna confirmed during quote review`, and links directly to the expanded Airtable job after approval. Automatic quote zones are persisted from the two-hub distance resolver; manual Airtable zones still override them.
+
+Internal review emails now label the computed amount **Auto quote** and carry
+the cached aerial image as an inline attachment, with the Render asset URL as
+the fallback link.
 
 For missing size, the system does not trust Google AI summaries or rental-unit descriptions as whole-building size. It provides Google, Zillow, Redfin, Realtor.com, and Homes.com search links for manual confirmation.
 

@@ -108,6 +108,23 @@ function clean(value) {
   return value === undefined || value === null ? "" : String(value).trim();
 }
 
+function inlineAerialAttachments(job = {}) {
+  const filePath = clean(job.emailAerialPath);
+  const cid = clean(job.emailAerialCid);
+  if (!filePath || !cid) return [];
+  try {
+    if (!fs.statSync(filePath).isFile()) return [];
+  } catch {
+    return [];
+  }
+  return [{
+    filename: assetFilename(clean(job.emailAssetSource) || filePath),
+    path: filePath,
+    cid,
+    contentType: "image/jpeg"
+  }];
+}
+
 function syncProjectState(job, patch = {}) {
   return projectState.upsertProject({
     id: job.recordId,
@@ -661,7 +678,8 @@ async function deliverGmailIntakeNotification(project, message) {
     quoteNotes: "Incoming email was labeled for FloorPlanDrawings intake. Review the extracted address and details before quoting.",
     gmailThreadUrl: threadUrl
   };
-  const email = newRequestEmail(job);
+  const preparedJob = await prepareEmailAssets(job);
+  const email = newRequestEmail(preparedJob);
   const reservation = projectState.reserveDelivery({
     projectId: project.id,
     idempotencyKey: `${project.id}:gmail_intake_notification:v1`,
@@ -680,6 +698,7 @@ async function deliverGmailIntakeNotification(project, message) {
       subject: message.subject ? `Re: ${message.subject.replace(/^re:\s*/i, "")}` : email.subject,
       html: email.html,
       text: email.text,
+      attachments: inlineAerialAttachments(preparedJob),
       headers: threadHeaders ? {
         ...(message.messageId ? { "In-Reply-To": message.messageId } : {}),
         References: threadHeaders
@@ -1274,7 +1293,8 @@ async function deliverQuoteReady(recordId) {
     const project = syncProjectState(job);
     const internalTo = [clean(process.env.SMTP_USER)];
     if (!internalTo[0]) throw new Error("SMTP_USER is not configured");
-    const email = quoteReadyEmail(await prepareEmailAssets(job));
+    const preparedJob = await prepareEmailAssets(job);
+    const email = quoteReadyEmail(preparedJob);
     if (shadowEnabled("QUOTE_READY")) {
       return { ok: true, shadow: true, status: 200, recordId, subject: email.subject, delivery: "not-sent" };
     }
@@ -1288,7 +1308,7 @@ async function deliverQuoteReady(recordId) {
     if (!logRecordId) throw new Error("Airtable did not return the reserved Communication Log ID");
     stateReservation = reserveRenderDelivery({ project, workflow: "QUOTE READY", recipientType: "internal", to: internalTo, subject: email.subject });
     if (stateReservation.duplicate) return { ok: false, status: 409, error: "Duplicate delivery blocked", recordId, deliveryId: stateReservation.delivery.id };
-    const delivery = await sendMail({ to: internalTo, replyTo: internalTo, fromName: "FloorPlanDrawings Workflow", subject: email.subject, html: email.html, text: email.text });
+    const delivery = await sendMail({ to: internalTo, replyTo: internalTo, fromName: "FloorPlanDrawings Workflow", subject: email.subject, html: email.html, text: email.text, attachments: inlineAerialAttachments(preparedJob) });
     projectState.updateDelivery(stateReservation.delivery.idempotencyKey, { status: "sent", attempts: delivery.attempts, provider: delivery.provider, messageId: delivery.messageId });
     await updateCommunicationLog(logRecordId, {
       "Delivery Status": "Sent",
@@ -1543,7 +1563,8 @@ async function deliverInternalNotification(recordId, eventType, buildEmail, stat
     const project = syncProjectState(job);
     const internalTo = [clean(process.env.SMTP_USER)];
     if (!internalTo[0]) throw new Error("SMTP_USER is not configured");
-    const email = buildEmail(await prepareEmailAssets(job));
+    const preparedJob = await prepareEmailAssets(job);
+    const email = buildEmail(preparedJob);
     if (shadowEnabled(eventType)) {
       return { ok: true, shadow: true, status: 200, recordId, eventType, subject: email.subject, delivery: "not-sent" };
     }
@@ -1558,7 +1579,7 @@ async function deliverInternalNotification(recordId, eventType, buildEmail, stat
     if (!logRecordId) throw new Error("Airtable did not return the reserved Communication Log ID");
     stateReservation = reserveRenderDelivery({ project, workflow: eventType, recipientType: "internal", to: internalTo, subject: email.subject });
     if (stateReservation.duplicate) return { ok: false, status: 409, error: "Duplicate delivery blocked", recordId, deliveryId: stateReservation.delivery.id };
-    const delivery = await sendMail({ to: internalTo, replyTo: internalTo, fromName: "FloorPlanDrawings Workflow", subject: email.subject, html: email.html, text: email.text });
+    const delivery = await sendMail({ to: internalTo, replyTo: internalTo, fromName: "FloorPlanDrawings Workflow", subject: email.subject, html: email.html, text: email.text, attachments: inlineAerialAttachments(preparedJob) });
     projectState.updateDelivery(stateReservation.delivery.idempotencyKey, { status: "sent", attempts: delivery.attempts, provider: delivery.provider, messageId: delivery.messageId });
     await updateCommunicationLog(logRecordId, {
       "Delivery Status": "Sent",
@@ -2671,14 +2692,16 @@ async function route(req, res) {
       // connected Anna account. Do not embed an Anna-account draft-search URL
       // in that message; use the account-neutral desktop/mobile compose links
       // rendered by the canonical template instead.
-      const sample = quoteReadyEmail(await prepareEmailAssets(sampleJob));
+      const preparedJob = await prepareEmailAssets(sampleJob);
+      const sample = quoteReadyEmail(preparedJob);
       const deliveries = [];
       for (const target of recipients) {
         deliveries.push({ recipient: target, ...(await sendMail({
           to: target,
           subject: `[TEST — NO WORKFLOW] ${sample.subject}`,
           html: sample.html,
-          text: sample.text
+          text: sample.text,
+          attachments: inlineAerialAttachments(preparedJob)
         })) });
       }
       return json(res, 200, { ok: true, test: true, recipients, formattedDraft: false, deliveries });
@@ -2760,12 +2783,14 @@ async function route(req, res) {
     try {
       const sampleJob = await buildTestQuote();
       const reviewUrl = appointmentReviewUrl("test-board", "test", weekStartDate(localDate()));
-      const sample = quoteReadyEmail(await prepareEmailAssets({ ...sampleJob, availabilityReviewUrl: reviewUrl }));
+      const preparedJob = await prepareEmailAssets({ ...sampleJob, availabilityReviewUrl: reviewUrl });
+      const sample = quoteReadyEmail(preparedJob);
       const delivery = await sendMail({
         to: recipient,
         subject: `[TEST — NO WORKFLOW] ${sample.subject}`,
         html: sample.html,
-        text: sample.text
+        text: sample.text,
+        attachments: inlineAerialAttachments(preparedJob)
       });
       return json(res, 200, { ok: true, test: true, workflow: "QUOTE READY + SCHEDULING BOARD", recipient, propertyAddress: sampleJob.propertyAddress, reviewUrl, ...delivery });
     } catch (error) {

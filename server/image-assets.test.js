@@ -26,6 +26,8 @@ test("email assets prefer an Airtable attachment and cache it behind a stable UR
   assert.equal(result.emailAssetSource, source);
   assert.equal(result.emailAerialUrl, "https://floor-plan-drawings.onrender.com/assets/property-aerial?address=1%20Test%20Street%2C%20Los%20Angeles%2C%20CA");
   assert.equal(result.emailAerialLink, result.emailAerialUrl);
+  assert.equal(result.emailAerialPath, path.join(directory, assetFilename(source)));
+  assert.match(result.emailAerialCid, /^fpd-aerial-[a-f0-9]{64}@floorplandrawings\.com$/);
   assert.equal(await fsp.readFile(path.join(directory, assetFilename(source)), "utf8"), "jpeg-bytes");
 });
 

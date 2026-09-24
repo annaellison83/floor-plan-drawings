@@ -107,9 +107,18 @@ requests, and writes only empty `Quote Calculation Notes` fields. The protected
 reviewed by Anna before `ENABLE_NOTE_TRANSLATION=true` is enabled. This staged
 baseline does not claim parity with Airtable's AI rewrite; selecting an external
 AI provider can remain a later enhancement without changing the data contract.
-Client confirmations and reminders likewise remain on their existing Airtable
-paths until their exact trigger/state contract is documented and a Render
-sender has passed a controlled test.
+Client confirmations are intentionally paused for now because the existing
+confirmation messages are creating inbox noise and confusing Anna. Keep
+`ENABLE_APPOINTMENT_CONFIRMATIONS` unset or `false` and do not turn the route
+back on until a replacement confirmation design is approved. Reminders remain
+separately gated behind `ENABLE_APPOINTMENT_REMINDERS` and should be migrated
+only after their trigger/state contract is documented and a Render sender has
+passed a controlled test.
+
+Internal quote and new-request messages use the canonical compact review
+template. The automatic price is labeled **Auto quote**, and Render attaches
+the cached aerial image inline with a content ID so Gmail can display it
+immediately; the stable Render URL remains the click-through fallback.
 
 The scheduled follow-up job must run at 8:00 AM America/Los_Angeles and must
 not send an empty digest.
