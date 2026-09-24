@@ -61,8 +61,9 @@ test("internal quote emails provide a clean client draft without changing native
   assert.match(email.clientReplyMailtoUrl, /^mailto:client@example\.com\?/);
   assert.match(email.html, /Draft Reply on Desktop/);
   assert.match(email.html, /Draft Reply on iPhone/);
-  assert.match(email.html, /fallback buttons open a new draft/);
-  assert.match(email.html, /googlegmail:\/\/co\?/);
+  assert.match(email.html, /Both buttons open a new draft/);
+  assert.match(email.html, /mailto:client@example\.com/);
+  assert.match(email.html, /background:#b8c9ae/);
   assert.doesNotMatch(email.html, /Open in Gmail app/);
   assert.match(email.html, /font-weight:700;">Client/);
   assert.match(email.html, /font-weight:700;">Service/);
@@ -98,8 +99,9 @@ test("internal quote email uses the signed formatted-draft link when available",
   assert.match(email.html, /Draft Reply on Desktop/);
   assert.match(email.html, /Draft Reply on iPhone/);
   assert.match(email.html, /client-draft%3Ftoken=test-token|client-draft\?token=test-token/);
-  assert.match(email.html, /Desktop opens the saved formatted draft; iPhone opens a clean Gmail compose/);
-  assert.match(email.html, /googlegmail:\/\/co\?/);
+  assert.match(email.html, /Desktop opens the saved formatted draft; iPhone opens a clean compose/);
+  assert.match(email.html, /mailto:client@example\.com/);
+  assert.match(email.html, /background:#b8c9ae/);
 });
 
 test("approved client quote can include appointment options", () => {

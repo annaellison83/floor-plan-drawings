@@ -224,10 +224,20 @@ function canonicalReviewEmail(job, options = {}) {
     link("Open Airtable record", record),
     link("Open Gmail thread", thread)
   ].filter(Boolean).join(" &nbsp;·&nbsp; ");
-  const draftButtonStyle = "display:inline-block;padding:11px 18px;margin:0 8px 8px 0;border-radius:8px;background:#173f36;color:#fff!important;font-size:14px;font-weight:700;text-decoration:none;";
+  const draftButton = (href, label, background, foreground, border = background) => href
+    ? `<a href="${escapeHtml(href)}" style="display:block;padding:11px 5px;border:1px solid ${border};border-radius:8px;background:${background};color:${foreground}!important;font-size:13px;line-height:17px;font-weight:700;text-align:center;text-decoration:none;">${escapeHtml(label)}</a>`
+    : "";
+  const replyButtons = (desktopHref, iphoneHref, note) => desktopHref && iphoneHref
+    ? `<div class="reply" style="margin-top:12px;padding-top:12px;border-top:1px solid #ddd7ca;"><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td width="50%" valign="top" style="width:50%;padding:0 4px 0 0;">${draftButton(desktopHref, "Draft Reply on Desktop", "#173f36", "#fff")}</td><td width="50%" valign="top" style="width:50%;padding:0 0 0 4px;">${draftButton(iphoneHref, "Draft Reply on iPhone", "#b8c9ae", "#173f36", "#9fb49a")}</td></tr></table><div style="margin-top:7px;font-size:12px;line-height:17px;color:#53635c;">To: ${escapeHtml(replyEmail)} · ${escapeHtml(note)}</div></div>`
+    : "";
+  // The Gmail iOS app can visibly register a tap but block custom
+  // `googlegmail://` URLs launched from an email. `mailto:` is the reliable
+  // cross-device compose handoff; it preserves all client-safe content even
+  // though the mobile compose itself is plain text.
+  const mobileReplyUrl = clientReplyMailtoUrl || clientReplyAppUrl;
   const reply = formattedDraftUrl
-    ? `<div class="reply" style="margin-top:12px;padding-top:12px;border-top:1px solid #ddd7ca;"><a href="${escapeHtml(formattedDraftUrl)}" style="${draftButtonStyle}">Draft Reply on Desktop</a><a href="${escapeHtml(clientReplyAppUrl)}" style="${draftButtonStyle}">Draft Reply on iPhone</a><div style="margin-top:2px;font-size:12px;line-height:17px;color:#53635c;">To: ${escapeHtml(replyEmail)} · Desktop opens the saved formatted draft; iPhone opens a clean Gmail compose.</div></div>`
-    : clientReplyUrl ? `<div class="reply" style="margin-top:12px;padding-top:12px;border-top:1px solid #ddd7ca;"><a href="${escapeHtml(clientReplyUrl)}" style="${draftButtonStyle}">Draft Reply on Desktop</a><a href="${escapeHtml(clientReplyAppUrl)}" style="${draftButtonStyle}">Draft Reply on iPhone</a><div style="margin-top:2px;font-size:12px;line-height:17px;color:#53635c;">To: ${escapeHtml(replyEmail)} · The fallback buttons open a new draft with the client-safe details.</div></div>` : "";
+    ? replyButtons(formattedDraftUrl, mobileReplyUrl, "Desktop opens the saved formatted draft; iPhone opens a clean compose.")
+    : replyButtons(clientReplyUrl, mobileReplyUrl, "Both buttons open a new draft with the client-safe details.");
   const pricingNote = [
     Number.isFinite(pricing.basePrice) && `Base service ${money(pricing.basePrice)}`,
     Number.isFinite(pricing.sizeFloor) && `large-project size floor ${money(pricing.sizeFloor)}`,
