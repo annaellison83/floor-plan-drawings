@@ -1,8 +1,11 @@
-const { buildAerialFallbackLink, buildZimasAddressLink } = require("./property-links");
 const { isGeneratedPropertyFallback } = require("./gmail-airtable-sync");
 
 function clean(value) {
   return value === undefined || value === null ? "" : String(value).trim();
+}
+
+function isPropertyAerialProxy(value) {
+  try { return new URL(clean(value)).pathname === "/assets/property-aerial"; } catch { return false; }
 }
 
 const RESEARCH_FIELDS = new Set([
@@ -53,11 +56,13 @@ async function enrichGmailProperty({ recordId, fields = {}, researchAddress, bui
       // Include the stored attachment and every stored/generated URL. This lets
       // a retry recover from a previously expired export without replacing a
       // manually supplied satellite link.
+      const storedMap = fields["Aerial Map URL"];
+      const storedSatellite = fields["Satellite Photo Link"];
       const prepared = await prepareEmailAssets({
         propertyAddress: address,
         aerialAttachmentUrl: attachmentUrl(fields["Aerial Parcel Preview"]),
-        mapUrl: fields["Aerial Map URL"] || built["Aerial Map URL"],
-        satellitePhotoLink: fields["Satellite Photo Link"] || built["Satellite Photo Link"]
+        mapUrl: isGeneratedPropertyFallback("Aerial Map URL", storedMap, address) || isPropertyAerialProxy(storedMap) ? built["Aerial Map URL"] : (storedMap || built["Aerial Map URL"]),
+        satellitePhotoLink: isGeneratedPropertyFallback("Satellite Photo Link", storedSatellite, address) || isPropertyAerialProxy(storedSatellite) ? built["Satellite Photo Link"] : (storedSatellite || built["Satellite Photo Link"])
       }, { regenerate: false }).catch(() => null);
       assetReady = Boolean(prepared && prepared.emailAerialUrl);
       if (assetReady) {
@@ -77,4 +82,4 @@ async function enrichGmailProperty({ recordId, fields = {}, researchAddress, bui
   }
 }
 
-module.exports = { enrichGmailProperty, attachmentUrl, replaceable };
+module.exports = { enrichGmailProperty, attachmentUrl, replaceable, isPropertyAerialProxy };

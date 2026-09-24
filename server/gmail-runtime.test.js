@@ -30,6 +30,12 @@ test("structured intake extraction removes inline map links from an address", ()
   assert.equal(extractPropertyAddress("", "150 El Camino Drive, Suite 300, Beverly Hills, CA 90212<https://www.google.com/maps/search/150+El+Camino>"), "150 El Camino Drive, Suite 300, Beverly Hills, CA 90212");
 });
 
+test("address parsing ignores a signature-only brokerage address", () => {
+  assert.equal(extractPropertyAddress("Floor plan request", "4111 Edgehill Drive\n\nThanks,\nBrokerage Team\n680 E Colorado Blvd, Suite 400, Pasadena, CA 91101"), "4111 Edgehill Drive");
+  assert.equal(extractPropertyAddress("Floor plan request", "Please measure the home.\n\nThanks,\nBrokerage Team\n680 E Colorado Blvd, Suite 400, Pasadena, CA 91101"), "");
+  assert.equal(extractPropertyAddress("Floor plan request", "Thanks for sending the address.\n680 E Colorado Blvd, Suite 400, Pasadena, CA 91101"), "680 E Colorado Blvd, Suite 400, Pasadena, CA 91101");
+});
+
 test("parseGmailMessage preserves thread and reply metadata and decodes bodies", () => {
   const parsed = parseGmailMessage({ id: "m1", threadId: "t1", historyId: "h1", internalDate: "10", labelIds: ["Label_29"], payload: { headers: [{ name: "From", value: "Agent <agent@example.com>" }, { name: "To", value: "Anna <anna@example.com>" }, { name: "Subject", value: "Floor plan request" }, { name: "Message-ID", value: "<m1@example.com>" }, { name: "References", value: "<old@example.com>" }], parts: [{ mimeType: "text/plain", body: { data: Buffer.from("Hello").toString("base64url") } }] } }, { agentEmails: ["agent@example.com"] });
   assert.equal(parsed.threadId, "t1"); assert.equal(parsed.messageId, "<m1@example.com>"); assert.equal(parsed.text, "Hello"); assert.equal(parsed.contacts.source.role, "agent");
@@ -40,6 +46,7 @@ test("FPD auto-label heuristic requires a marker plus an address and rejects unr
   assert.equal(isLikelyFloorPlanIntake({ subject: "NEW JOB: 921 Thayer Avenue", text: "Please let me know your next available date for this home to get measured.", propertyAddress: "921 Thayer Avenue" }), true);
   assert.equal(isLikelyFloorPlanIntake({ subject: "Appointment Confirmation", text: "Kaiser appointment at 4111 Edgehill Drive", propertyAddress: "4111 Edgehill Drive" }), false);
   assert.equal(isLikelyFloorPlanIntake({ subject: "Quick hello", text: "Can you do Tuesday?", propertyAddress: "4111 Edgehill Drive" }), false);
+  assert.equal(isLikelyFloorPlanIntake({ subject: "[TEST — NO WORKFLOW] FloorPlanDrawings | QUOTE READY | 4968 VINCENT AVE LOS ANGELES CA 90041", text: "4968 VINCENT AVE LOS ANGELES CA 90041 floor plan", propertyAddress: "4968 VINCENT AVE LOS ANGELES CA 90041" }), false);
 });
 
 test("parseGmailMessage collects attachment names for intake heuristics", () => {

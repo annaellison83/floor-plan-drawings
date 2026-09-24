@@ -113,7 +113,12 @@ function extractPropertyAddress(subject, text) {
   if (dashAddress && clean(dashAddress[1])) return clean(dashAddress[1]);
   const inlineAddress = headline.match(/\b\d{1,6}\s+[^\n|,]{1,90}?\b(?:street|st|avenue|ave|boulevard|blvd|drive|dr|road|rd|lane|ln|court|ct|place|pl|way|parkway|pkwy|circle|cir|terrace|ter|highway|hwy)\b(?:\s+(?:#|unit|suite|apt)\s*[A-Za-z0-9-]+)?/i);
   if (inlineAddress && clean(inlineAddress[0])) return clean(inlineAddress[0]);
-  const lines = clean(text).split(/\r?\n/)
+  const rawLines = clean(text).split(/\r?\n/);
+  // Ignore the trailing signature block when the message has no structured
+  // subject address. This prevents a brokerage office address from becoming a
+  // new job while retaining addresses in the request body above the sign-off.
+  const signatureIndex = rawLines.findIndex((line) => /^(?:--\s*$|best(?: regards)?[,!]?|thanks[,!]?|thank you[,!]?|warm regards[,!]?|sincerely[,!]?|sent from my .+)$/i.test(clean(line)));
+  const lines = (signatureIndex >= 0 ? rawLines.slice(0, signatureIndex) : rawLines)
     .map((line) => clean(line).replace(/<https?:\/\/[^>]+>/gi, "").replace(/https?:\/\/\S+/gi, "").trim())
     .filter(Boolean);
   for (let index = 0; index < lines.length; index += 1) {
@@ -158,6 +163,7 @@ const FPD_NON_INTAKE_MARKERS = /\b(?:kaiser|medical|therapy|soul\s*tenders|strip
 function isLikelyFloorPlanIntake(message = {}) {
   const subject = clean(message.subject);
   const text = clean(message.text || message.snippet);
+  if (/^\[TEST\s+—\s+NO\s+WORKFLOW\]/i.test(subject)) return false;
   const attachments = Array.isArray(message.attachmentNames) ? message.attachmentNames.join(" ") : "";
   const searchable = `${subject}\n${text}\n${attachments}`;
   if (!searchable || FPD_NON_INTAKE_MARKERS.test(searchable)) return false;

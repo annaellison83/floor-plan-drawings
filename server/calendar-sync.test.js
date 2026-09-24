@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { calendarAirtableFields, calendarEventKey, extractAddress, findProjectMatch, isLikelyWorkEvent, jobIdForCalendarEvent, normalizeAddress } = require("./calendar-sync");
+const { calendarAirtableFields, calendarEventKey, extractAddress, findProjectMatch, isLikelyWorkEvent, jobIdForCalendarEvent, mergeCalendarAirtableFields, normalizeAddress, shouldSkipBlankAddressCreate } = require("./calendar-sync");
 
 const calendar = { name: "Corrie", url: "https://caldav.example/corrie/" };
 const event = {
@@ -57,4 +57,47 @@ test("calendar sync can carry an explicitly classified Gmail thread", () => {
   assert.equal(fields["Gmail Thread ID"], "thread-42");
   assert.equal(fields["Client Name"], "Client From Thread");
   assert.equal(fields["Client Email"], "client@example.com");
+});
+
+test("calendar sync preserves every nonblank workflow status and identity fields", () => {
+  for (const status of ["Delivered", "Completed", "Needs Manual Review"]) {
+  const existing = { fields: {
+    Status: status,
+    "Job ID": "WEB-42",
+    "Website Workflow": "Order",
+    "Source Channels": "gmail",
+    "Property Address": "123 Main St"
+  } };
+  const patch = mergeCalendarAirtableFields(existing, {
+    Status: "Calendar Imported",
+    "Job ID": "CAL-new",
+    "Website Workflow": "Calendar",
+    "Source Channels": "calendar",
+    "Property Address": "123 Main St"
+  });
+  assert.equal(patch.Status, undefined);
+  assert.equal(patch["Job ID"], undefined);
+  assert.equal(patch["Website Workflow"], undefined);
+  assert.equal(patch["Source Channels"], "gmail, calendar");
+  }
+});
+
+test("calendar sync fills a blank status while retaining blank identity fields", () => {
+  const existing = { fields: { Status: "", "Job ID": "", "Website Workflow": "", "Property Address": "123 Main St" } };
+  const patch = mergeCalendarAirtableFields(existing, { Status: "Calendar Imported", "Job ID": "CAL-new", "Website Workflow": "Calendar", "Property Address": "123 Main St" });
+  assert.equal(patch.Status, "Calendar Imported");
+  assert.equal(patch["Job ID"], "CAL-new");
+  assert.equal(patch["Website Workflow"], "Calendar");
+});
+
+test("calendar sync fills protected identity fields omitted from the Airtable schema", () => {
+  const patch = mergeCalendarAirtableFields({ fields: { "Property Address": "123 Main St" } }, { Status: "Calendar Imported", "Job ID": "CAL-new", "Website Workflow": "Calendar" });
+  assert.deepEqual(patch, { Status: "Calendar Imported", "Job ID": "CAL-new", "Website Workflow": "Calendar" });
+});
+
+test("calendar sync fields do not invent an address for marker-only events", () => {
+  const fields = calendarAirtableFields(calendar, { uid: "marker-only", summary: "floor plan appointment", description: "client visit" });
+  assert.equal(fields["Property Address"], "");
+  assert.equal(shouldSkipBlankAddressCreate(fields, null), true);
+  assert.equal(shouldSkipBlankAddressCreate(fields, { id: "existing" }), false);
 });

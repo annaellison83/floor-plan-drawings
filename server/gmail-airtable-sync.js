@@ -65,6 +65,21 @@ function findGmailAirtableMatch(records = [], { threadId, propertyAddress } = {}
   return byAddress.length === 1 ? byAddress[0] : null;
 }
 
+function findGmailAirtableThreadMatch(records = [], { threadId } = {}) {
+  const thread = normalizeThreadId(threadId);
+  if (!thread) return null;
+  const matches = records.filter((record) => normalizeThreadId(record && record.fields && record.fields["Gmail Thread ID"]) === thread);
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function resolveGmailSyncAddress(message = {}, project = {}, records = []) {
+  const directAddress = clean(message.propertyAddress);
+  if (directAddress) return { address: directAddress, existing: null };
+  const threadId = clean(message.threadId || project.metadata && project.metadata.gmailThreadId);
+  const existing = findGmailAirtableThreadMatch(records, { threadId });
+  return { address: clean(existing && existing.fields && existing.fields["Property Address"]), existing };
+}
+
 function gmailAirtableFields(message = {}, project = {}, existing = null) {
   const address = clean(message.propertyAddress || project.propertyAddress);
   const threadId = normalizeThreadId(message.threadId || project.metadata && project.metadata.gmailThreadId);
@@ -122,11 +137,13 @@ function isGeneratedPropertyFallback(key, value, address) {
 
 module.exports = {
   findGmailAirtableMatch,
+  findGmailAirtableThreadMatch,
   gmailAirtableFields,
   gmailAirtableKey,
   gmailJobId,
   isGeneratedPropertyFallback,
   normalizeThreadId,
   normalizedPropertyKey,
-  patchMissingGmailFields
+  patchMissingGmailFields,
+  resolveGmailSyncAddress
 };

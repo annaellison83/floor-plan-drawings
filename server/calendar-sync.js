@@ -103,4 +103,25 @@ function calendarAirtableFields(calendar, event, project = null, gmailMatch = nu
   }, address);
 }
 
-module.exports = { calendarAirtableFields, calendarEventKey, extractAddress, findProjectMatch, isLikelyWorkEvent, jobIdForCalendarEvent, normalizeAddress };
+function mergeCalendarAirtableFields(existingRecord, incomingFields) {
+  const existing = existingRecord && existingRecord.fields ? existingRecord.fields : existingRecord || {};
+  return Object.fromEntries(Object.entries(incomingFields || {})
+    .filter(([key, value]) => value !== "" && (["Status", "Job ID", "Website Workflow"].includes(key) || Object.prototype.hasOwnProperty.call(existing, key)))
+    .map(([key, value]) => {
+      // Calendar discovery is a source of scheduling metadata, not authority over
+      // an existing workflow identity or manually advanced status.
+      if (["Status", "Job ID", "Website Workflow"].includes(key) && clean(existing[key])) {
+        return null;
+      }
+      if (key === "Source Channels") {
+        return [key, [...new Set(`${clean(existing[key])},${clean(value)}`.split(",").map(clean).filter(Boolean))].join(", ")];
+      }
+      return [key, value];
+    }).filter(Boolean));
+}
+
+function shouldSkipBlankAddressCreate(fields, existingRecord) {
+  return !clean(fields && fields["Property Address"]) && !existingRecord;
+}
+
+module.exports = { calendarAirtableFields, calendarEventKey, extractAddress, findProjectMatch, isLikelyWorkEvent, jobIdForCalendarEvent, mergeCalendarAirtableFields, normalizeAddress, shouldSkipBlankAddressCreate };

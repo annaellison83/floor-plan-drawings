@@ -2,12 +2,14 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   findGmailAirtableMatch,
+  findGmailAirtableThreadMatch,
   gmailAirtableKey,
   gmailJobId,
   gmailAirtableFields,
   isGeneratedPropertyFallback,
   normalizedPropertyKey,
-  patchMissingGmailFields
+  patchMissingGmailFields,
+  resolveGmailSyncAddress
 } = require("./gmail-airtable-sync");
 
 test("normalizes the Gmail thread/address key deterministically", () => {
@@ -19,6 +21,18 @@ test("normalizes the Gmail thread/address key deterministically", () => {
 test("matches an existing record by exact Gmail thread and address", () => {
   const records = [{ id: "rec1", fields: { "Gmail Thread ID": "thread-123", "Property Address": "228 East Avenue 42, Los Angeles, CA 90031" } }];
   assert.equal(findGmailAirtableMatch(records, { threadId: "thread-123", propertyAddress: "228 East Avenue 42, Los Angeles, CA 90031" }).id, "rec1");
+});
+
+test("matches an existing record by unique thread when a reply has no extracted address", () => {
+  const record = { id: "rec1", fields: { "Gmail Thread ID": "thread-123", "Property Address": "228 East Avenue 42, Los Angeles, CA 90031" } };
+  assert.equal(findGmailAirtableThreadMatch([record], { threadId: "thread-123" }), record);
+  assert.equal(findGmailAirtableThreadMatch([record, { id: "rec2", fields: { "Gmail Thread ID": "thread-123", "Property Address": "other" } }], { threadId: "thread-123" }), null);
+});
+
+test("does not revive a removed project from its stored signature address", () => {
+  const message = { id: "m1", threadId: "thread-signature-only", propertyAddress: "", subject: "fp for st andrew", text: "Please review floor plan" };
+  const project = { propertyAddress: "6430 W Sunset Boulevard, 6th Floor", metadata: { gmailThreadId: "thread-signature-only" } };
+  assert.deepEqual(resolveGmailSyncAddress(message, project, []), { address: "", existing: null });
 });
 
 test("merges a unique calendar-first address instead of creating a duplicate", () => {

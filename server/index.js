@@ -11,12 +11,13 @@ const {
 const { buildRoster } = require("./calendar-roster");
 const { appointmentDurationMinutes, deliveryTargetForWeekday, schedulingPolicy } = require("./scheduling-policy");
 const { planAppointments } = require("./appointment-planner");
-const { calendarAirtableFields, calendarEventKey, extractAddress, findProjectMatch, isLikelyWorkEvent, normalizeAddress } = require("./calendar-sync");
+const { calendarAirtableFields, calendarEventKey, extractAddress, findProjectMatch, isLikelyWorkEvent, mergeCalendarAirtableFields, normalizeAddress, shouldSkipBlankAddressCreate } = require("./calendar-sync");
 const { proposalPayload, signProposal, verifyProposal } = require("./appointment-proposals");
 const { hasFallbackSmtp, isSmtpConfigured, sendFailureAlert, sendMail, verifySmtp } = require("./mail");
 const { projectState, recipientsFor } = require("./project-state");
 const { createGmailClient, isGmailConfigured, isGmailDraftConfigured, isLikelyFloorPlanIntake, parseGmailMessage, processIntakeMessages } = require("./gmail-runtime");
-const { findGmailAirtableMatch, gmailAirtableFields, isGeneratedPropertyFallback, patchMissingGmailFields } = require("./gmail-airtable-sync");
+const { findGmailAirtableMatch, gmailAirtableFields, isGeneratedPropertyFallback, patchMissingGmailFields, resolveGmailSyncAddress } = require("./gmail-airtable-sync");
+const { enrichGmailProperty: enrichGmailPropertyWithAssets } = require("./gmail-property-enrichment");
 const { translateClientNotes } = require("./note-translation");
 const { assetFilename, prepareEmailAssets, readAsset } = require("./image-assets");
 const { researchAddress, buildUpdateFields } = require("../netlify/functions/property-research");
@@ -355,15 +356,6 @@ function airtableCalendarMatch(fields, records = []) {
   }) || null;
 }
 
-function knownAirtablePatch(record, fields) {
-  const existing = record && record.fields ? record.fields : {};
-  return Object.fromEntries(Object.entries(fields)
-    .filter(([key, value]) => Object.prototype.hasOwnProperty.call(existing, key) && value !== "")
-    .map(([key, value]) => [key, key === "Source Channels"
-      ? [...new Set(`${clean(existing[key])},${clean(value)}`.split(",").map(clean).filter(Boolean))].join(", ")
-      : value]));
-}
-
 async function findGmailThreadMatch(event, client, cache, errors = []) {
   const address = extractAddress(event);
   if (!client || !address) return null;
@@ -454,11 +446,16 @@ async function syncGmailMessageToAirtable(message, project, airtableRecords = []
   if (!process.env.AIRTABLE_TOKEN || !process.env.AIRTABLE_BASE_ID) {
     throw new Error("Gmail-to-Airtable sync is enabled but Airtable is not configured");
   }
-  const address = clean(message && message.propertyAddress || project && project.propertyAddress);
   const threadId = clean(message && message.threadId || project && project.metadata && project.metadata.gmailThreadId);
-  if (!address || !threadId) return { action: "skipped", reason: !address ? "property address is missing" : "Gmail thread ID is missing" };
-  const existing = findGmailAirtableMatch(airtableRecords, { threadId, propertyAddress: address });
-  const fields = gmailAirtableFields(message, project, existing);
+  if (!threadId) return { action: "skipped", reason: "Gmail thread ID is missing" };
+  const resolved = resolveGmailSyncAddress(message, project, airtableRecords);
+  const directAddress = clean(message && message.propertyAddress);
+  const existingByThread = resolved.existing;
+  const address = resolved.address;
+  if (!address) return { action: "skipped", reason: "property address is missing from the message; existing project address was not used for creation" };
+  const existing = existingByThread || findGmailAirtableMatch(airtableRecords, { threadId, propertyAddress: address });
+  const messageWithResolvedAddress = directAddress ? message : { ...message, propertyAddress: address };
+  const fields = gmailAirtableFields(messageWithResolvedAddress, project, existing);
   if (existing) {
     const patch = patchMissingGmailFields(existing, fields);
     if (Object.keys(patch).length) await updateJob(existing.id, patch);
@@ -479,41 +476,14 @@ async function syncGmailMessageToAirtable(message, project, airtableRecords = []
 }
 
 async function enrichGmailProperty(recordId, fields = {}) {
-  const address = clean(fields["Property Address"] || fields["Full Address"]);
-  if (!recordId || !address) return { ok: false, skipped: true, reason: "property address is missing" };
-  if (fields["Property Research Complete"] && clean(fields["Property Check Status"]) && clean(fields["Property Check Status"]) !== "Needs Manual Review") {
-    return { ok: true, skipped: true, reason: "already researched" };
-  }
-  try {
-    const research = await researchAddress(address, { mapQuery: fields["Map Query"] });
-    const built = buildUpdateFields(research, fields);
-    const allowed = new Set(["Property Check Status", "Property Data Source URL", "Google Sq Ft Search URL", "Property Research Complete", "LA City Match Status", "APN", "PIN", "Lot Size", "Zoning", "Neighborhood / LA Area", "Miles From North Hollywood", "Miles From Monterey Park", "Aerial Map URL", "Satellite Photo Link", "Aerial Parcel Preview", "LA Context Map URL", "LA Context Map Preview", "ZIMAS Link", "Google Maps Link"]);
-    const researchFields = {};
-    let assetReady = false;
-    for (const [key, value] of Object.entries(built)) {
-      if (!allowed.has(key) || value === "" || value === null || value === undefined) continue;
-      if (key === "Property Research Complete") {
-        researchFields[key] = Boolean(research.ok);
-      } else if (["Property Check Status", "LA City Match Status"].includes(key) || !clean(fields[key]) || isGeneratedPropertyFallback(key, fields[key], address)) {
-        researchFields[key] = value;
-      }
-    }
-    if (research.ok) {
-      const prepared = await prepareEmailAssets({ propertyAddress: address, mapUrl: researchFields["Aerial Map URL"], satellitePhotoLink: researchFields["Satellite Photo Link"] }, { regenerate: false }).catch(() => null);
-      assetReady = Boolean(prepared && prepared.emailAerialUrl);
-      if (prepared && prepared.emailAerialUrl && (!clean(fields["Aerial Map URL"]) || isGeneratedPropertyFallback("Aerial Map URL", fields["Aerial Map URL"], address))) {
-        researchFields["Aerial Map URL"] = prepared.emailAerialUrl;
-        researchFields["Satellite Photo Link"] = prepared.emailAerialUrl;
-      }
-    }
-    if (Object.prototype.hasOwnProperty.call(researchFields, "Property Research Complete")) researchFields["Property Research Complete"] = Boolean(research.ok && assetReady);
-    if (Object.keys(researchFields).length) await updateJob(recordId, researchFields);
-    return { ok: Boolean(research.ok), status: research.status, researchFields: Object.keys(researchFields) };
-  } catch (error) {
-    console.warn("Gmail property research failed", error.message);
-    try { await updateJob(recordId, { "Property Research Complete": false, "Property Check Status": "Needs Manual Review" }); } catch (updateError) { console.warn("Gmail property research retry state failed", updateError.message); }
-    return { ok: false, retryable: true, error: error.message };
-  }
+  return enrichGmailPropertyWithAssets({
+    recordId,
+    fields,
+    researchAddress,
+    buildUpdateFields,
+    prepareEmailAssets,
+    updateJob
+  });
 }
 
 async function backfillGmailProjectsToAirtable(client, airtableRecords, results) {
@@ -535,7 +505,13 @@ async function backfillGmailProjectsToAirtable(client, airtableRecords, results)
     const messageId = clean(project.metadata && project.metadata.gmailMessageId);
     if (!messageId) continue;
     attempted += 1;
-    projectState.updateProject(project.id, { metadata: { gmailPropertyResearchLastAttempt: Date.now(), gmailPropertyResearchAttempts: (Number(project.metadata && project.metadata.gmailPropertyResearchAttempts) || 0) + 1 } });
+    projectState.updateProjectProgress(project.id, {
+      metadata: {
+        ...(project.metadata || {}),
+        gmailPropertyResearchLastAttempt: Date.now(),
+        gmailPropertyResearchAttempts: (Number(project.metadata && project.metadata.gmailPropertyResearchAttempts) || 0) + 1
+      }
+    }, "gmail-property-research");
     try {
       const raw = await client.getMessage(messageId);
       const parsed = parseGmailMessage(raw, { agentEmails: client.config.agentEmails, clientEmails: client.config.clientEmails });
@@ -587,6 +563,14 @@ async function syncCalendarToAirtable(input = {}) {
         ? { threadId: projectThreadId, id: project.metadata.gmailMessageId || "" }
         : await findGmailThreadMatch(event, gmailClient, gmailCache, gmailLookupErrors);
       const fields = calendarAirtableFields(calendar, event, project, gmailMatch);
+      const existing = airtableCalendarMatch(fields, airtableRecords);
+      // A marker such as “floor plan” is enough to inspect an event, but never
+      // enough to create a new job. Existing records can still be reconciled by
+      // stable calendar identity when their address is already stored.
+      if (shouldSkipBlankAddressCreate(fields, existing)) {
+        skipped.push({ calendar: calendar.name, uid: clean(event.uid), summary: clean(event.summary), reason: "No property address; no Airtable record created" });
+        continue;
+      }
       let gmailLabelApplied = false;
       if (!dryRun && calendarGmailLabelSyncEnabled() && gmailMatch) {
         try {
@@ -597,7 +581,6 @@ async function syncCalendarToAirtable(input = {}) {
           gmailLabelErrors.push({ threadId: gmailMatch.threadId, error: error.message });
         }
       }
-      const existing = airtableCalendarMatch(fields, airtableRecords);
       const action = existing ? "matched" : "create";
       let airtableRecordId = existing && existing.id || "";
       if (project && !dryRun) {
@@ -620,7 +603,7 @@ async function syncCalendarToAirtable(input = {}) {
         });
       }
       if (!dryRun && existing) {
-        const patch = knownAirtablePatch(existing, fields);
+        const patch = mergeCalendarAirtableFields(existing, fields);
         if (Object.keys(patch).length) await updateJob(existing.id, patch);
       } else if (!dryRun && !existing) {
         const created = await createAirtableIntakeRecord({ fields });
