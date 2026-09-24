@@ -2,6 +2,7 @@ const AIRTABLE_API_URL = "https://api.airtable.com/v0";
 const crypto = require("crypto");
 const { researchAddress, buildUpdateFields } = require("./property-research");
 const { ensurePropertyLinks } = require("../../server/property-links");
+const { largeColorProjectFloor } = require("../../server/quote-pricing");
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -457,11 +458,13 @@ function isComplexProperty(fields) {
 function calculateSuggestedQuote(fields, research, pricingRows) {
   const assessor = research && research.countyAssessor;
   const verifiedSqFt = assessor && assessor.buildingSqFt ? Number(assessor.buildingSqFt) : null;
+  const submittedSqFt = parseSquareFeet(fields["Approx Sq Ft"]);
+  const pricingSqFt = verifiedSqFt || submittedSqFt;
   const style = quoteStyle(fields["Drawing Style"]);
   const tourRequested = /^(yes|true|requested|add|included)$/i.test(clean(fields["3D Tour Requested"]));
   const notes = [];
 
-  if (!verifiedSqFt) {
+  if (!pricingSqFt) {
     return {
       fields: {
         "Quote Review": "Ready for Anna",
@@ -470,6 +473,8 @@ function calculateSuggestedQuote(fields, research, pricingRows) {
       note: "No online building square footage found"
     };
   }
+
+  const provisionalSize = !verifiedSqFt;
 
   const rows = (pricingRows || [])
     .map((row) => ({
@@ -484,14 +489,34 @@ function calculateSuggestedQuote(fields, research, pricingRows) {
     }))
     .filter((row) => row.maxSqFt && row.maxSqFt > 0)
     .sort((a, b) => a.maxSqFt - b.maxSqFt);
-  const row = rows.find((candidate) => verifiedSqFt <= candidate.maxSqFt);
+  const row = rows.find((candidate) => pricingSqFt <= candidate.maxSqFt);
+
+  const sizeFloor = largeColorProjectFloor(pricingSqFt, fields["Drawing Style"]);
+  const zoneNumber = quoteZoneNumber(fields["Quote Zone"]);
+  const zoneMinimum = zoneNumber ? ZONE_MINIMUMS[zoneNumber] : null;
 
   if (!row || !style) {
+    if (sizeFloor) {
+      const suggested = Math.max(sizeFloor, zoneMinimum || 0);
+      return {
+        fields: {
+          "Suggested Quote": suggested,
+          "Quote Calculation Notes": [
+            `${provisionalSize ? "Client/listing estimate" : "Online size"}: ${pricingSqFt.toLocaleString()} sq ft`,
+            `Linear large-project starting floor: $${suggested}`,
+            "Verify the building size and adjust the quote before approval.",
+            zoneMinimum ? `Zone ${zoneNumber} minimum: $${zoneMinimum} (minimum, not an add-on)` : "Set Quote Zone to Zone 1, 2, 3, or 4; the zone minimum is a floor, not an add-on"
+          ].join("\n"),
+          "Quote Review": "Ready for Anna"
+        },
+        note: `Provisional size-based quote: $${suggested}`
+      };
+    }
     return {
       fields: {
         "Quote Review": "Ready for Anna",
         "Quote Calculation Notes": !row
-          ? `${verifiedSqFt.toLocaleString()} sq ft is outside the configured pricing table; Anna should quote manually.`
+          ? `${pricingSqFt.toLocaleString()} sq ft is outside the configured pricing table; Anna should quote manually.`
           : "The requested drawing service does not match a configured pricing rule; Anna should quote manually."
       },
       note: !row ? "Size outside pricing table" : "Service needs manual pricing"
@@ -529,6 +554,13 @@ function calculateSuggestedQuote(fields, research, pricingRows) {
   }
 
   let suggested = base;
+  if (sizeFloor && suggested < sizeFloor) {
+    suggested = sizeFloor;
+    notes.push(`Large color-project size floor: $${sizeFloor} (starting estimate, not an add-on)`);
+  }
+  if (provisionalSize) {
+    notes.push("Size is a client/listing estimate; verify it before approval");
+  }
   if (tourRequested && style !== "matterport") {
     if (Number.isFinite(row.matterport)) {
       suggested += row.matterport;
@@ -539,8 +571,6 @@ function calculateSuggestedQuote(fields, research, pricingRows) {
   }
   const complex = isComplexProperty(fields);
   if (complex) notes.push("Multi-unit/commercial/partial-scope adjustment is pending Anna's fee rule");
-  const zoneNumber = quoteZoneNumber(fields["Quote Zone"]);
-  const zoneMinimum = zoneNumber ? ZONE_MINIMUMS[zoneNumber] : null;
   if (zoneMinimum) {
     suggested = Math.max(suggested, zoneMinimum);
     notes.push(`Zone ${zoneNumber} minimum: $${zoneMinimum} (minimum, not an add-on)`);
@@ -552,7 +582,7 @@ function calculateSuggestedQuote(fields, research, pricingRows) {
     fields: {
       "Suggested Quote": suggested,
       "Quote Calculation Notes": [
-        `Online size: ${verifiedSqFt.toLocaleString()} sq ft`,
+        `${provisionalSize ? "Client/listing estimate" : "Online size"}: ${pricingSqFt.toLocaleString()} sq ft`,
         `Pricing row: ${row.sizeBand || `up to ${row.maxSqFt.toLocaleString()} sq ft`}`,
         `Base service: ${serviceLabel} ($${base})`,
         ...notes

@@ -1819,8 +1819,16 @@ function encodeGmailDraftMessage({ to, subject, htmlBody, textBody }) {
   return Buffer.from(lines.join("\r\n"), "utf8").toString("base64url");
 }
 
-function gmailDraftUrl(draftId) {
-  return `https://mail.google.com/mail/u/0/#drafts/${encodeURIComponent(clean(draftId))}`;
+// Gmail's web UI does not accept a Gmail API draft ID in a #drafts/<id>
+// fragment. It silently falls back to the generic Drafts view. Search by the
+// exact subject instead; this works in desktop Gmail and Gmail mobile web and
+// leaves the user one tap away from the actual saved draft.
+function gmailDraftUrl(subject) {
+  const parts = clean(subject).split("|").map((part) => part.trim()).filter(Boolean);
+  const terms = parts.length > 1 ? [parts[0], parts.slice(1).join("|")] : parts;
+  const quoted = terms.map((term) => `"${term.replaceAll('"', '\\"')}"`);
+  const query = ["in:drafts", ...quoted].join(" ");
+  return `https://mail.google.com/mail/u/0/#search/${encodeURIComponent(query)}`;
 }
 
 async function createFormattedClientDraft(job) {
@@ -1842,7 +1850,7 @@ async function createFormattedClientDraft(job) {
       threadId: clean(job.gmailThreadId)
     });
     if (!clean(draft && draft.id)) throw new Error("Gmail did not return a draft ID");
-    return { draftId: clean(draft.id), url: gmailDraftUrl(draft.id), subject, recipient: clientEmail };
+    return { draftId: clean(draft.id), url: gmailDraftUrl(subject), subject, recipient: clientEmail };
   })();
   clientDraftCache.set(key, promise);
   try {
@@ -1855,7 +1863,7 @@ async function createFormattedClientDraft(job) {
 
 function clientDraftResultPage(result) {
   const draftsUrl = "https://mail.google.com/mail/u/0/#drafts";
-  return `<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Draft reply created</title></head><body style="margin:0;background:#f3f1eb;color:#22332e;font-family:Arial,Helvetica,sans-serif;"><main style="max-width:620px;margin:8vh auto;padding:30px 24px;background:#fbf8f1;border:1px solid #ddd7ca;border-radius:14px;"><div style="color:#53635c;font-size:11px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;">FloorPlanDrawings</div><h1 style="margin:12px 0;color:#173f36;font-size:28px;line-height:35px;">Draft reply created</h1><p style="font-size:16px;line-height:25px;">A formatted Gmail draft is ready for <strong>${escapeHtml(result.recipient)}</strong>. Review it, adjust anything you need, and send it from Anna’s Gmail.</p><p style="font-size:14px;line-height:22px;color:#53635c;">Subject: ${escapeHtml(result.subject)}</p><p style="margin-top:22px;"><a href="${escapeHtml(result.url)}" style="display:inline-block;padding:13px 18px;border-radius:8px;background:#173f36;color:#fff;text-decoration:none;font-weight:700;">Open draft</a></p><p style="font-size:13px;line-height:20px;color:#53635c;">On iPhone, if the button stays in the browser, open the Gmail app and tap Drafts. The draft is already saved there.</p><p><a href="${draftsUrl}" style="color:#0b57d0;">Open Gmail Drafts</a></p></main></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Draft reply created</title></head><body style="margin:0;background:#f3f1eb;color:#22332e;font-family:Arial,Helvetica,sans-serif;"><main style="max-width:620px;margin:8vh auto;padding:30px 24px;background:#fbf8f1;border:1px solid #ddd7ca;border-radius:14px;"><div style="color:#53635c;font-size:11px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;">FloorPlanDrawings</div><h1 style="margin:12px 0;color:#173f36;font-size:28px;line-height:35px;">Draft reply created</h1><p style="font-size:16px;line-height:25px;">A formatted Gmail draft is ready for <strong>${escapeHtml(result.recipient)}</strong>. Review it, adjust anything you need, and send it from Anna’s Gmail.</p><p style="font-size:14px;line-height:22px;color:#53635c;">Subject: ${escapeHtml(result.subject)}</p><p style="margin-top:22px;"><a href="${escapeHtml(result.url)}" style="display:inline-block;padding:13px 18px;border-radius:8px;background:#173f36;color:#fff;text-decoration:none;font-weight:700;">Open matching Gmail draft</a></p><p style="font-size:13px;line-height:20px;color:#53635c;">The button searches Gmail for this exact draft subject. On iPhone, if Gmail stays in the browser, open the Gmail app and tap Drafts; the draft is already saved there.</p><p><a href="${draftsUrl}" style="color:#0b57d0;">Open Gmail Drafts</a></p></main></body></html>`;
 }
 
 function testSchedulingPreviewJob() {

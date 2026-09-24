@@ -41,6 +41,13 @@ function assetUrlFor(url, env = process.env) {
   return `${publicBaseUrl(env)}/assets/email/${assetFilename(url)}`;
 }
 
+function propertyAerialUrlFor(address, env = process.env) {
+  const value = clean(address);
+  return value
+    ? `${publicBaseUrl(env)}/assets/property-aerial?address=${encodeURIComponent(value)}`
+    : "";
+}
+
 function candidateUrls(job = {}) {
   return [...new Set([
     job.aerialAttachmentUrl,
@@ -82,10 +89,14 @@ async function prepareEmailAssets(job = {}, options = {}) {
   for (const sourceUrl of candidates) {
     try {
       const cached = await cacheRemoteImage(sourceUrl, options);
+      const stableUrl = propertyAerialUrlFor(job.propertyAddress, options.env || process.env) || cached.url;
       return {
         ...job,
-        emailAerialUrl: cached.url,
-        emailAerialLink: sourceUrl,
+        // Render's local filesystem can be replaced during a deploy/restart.
+        // The stable proxy regenerates/caches the image on demand instead of
+        // leaving old emails pointed at a missing ephemeral file.
+        emailAerialUrl: stableUrl,
+        emailAerialLink: stableUrl,
         emailAssetSource: sourceUrl,
         emailAssetError: ""
       };
@@ -110,10 +121,11 @@ async function prepareEmailAssets(job = {}, options = {}) {
       const freshUrl = clean(body && body.research && body.research.candidate && body.research.candidate.aerialUrl);
       if (!response.ok || !freshUrl) throw new Error(`property research returned ${response && response.status || "no aerial"}`);
       const cached = await cacheRemoteImage(freshUrl, options);
+      const stableUrl = propertyAerialUrlFor(job.propertyAddress, options.env || process.env) || cached.url;
       return {
         ...job,
-        emailAerialUrl: cached.url,
-        emailAerialLink: freshUrl,
+        emailAerialUrl: stableUrl,
+        emailAerialLink: stableUrl,
         emailAssetSource: freshUrl,
         emailAssetError: failures.join("; ")
       };
@@ -143,6 +155,7 @@ module.exports = {
   assetDirectory,
   assetFilename,
   assetUrlFor,
+  propertyAerialUrlFor,
   cacheRemoteImage,
   candidateUrls,
   prepareEmailAssets,

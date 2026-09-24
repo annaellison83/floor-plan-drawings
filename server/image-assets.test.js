@@ -24,7 +24,8 @@ test("email assets prefer an Airtable attachment and cache it behind a stable UR
   });
 
   assert.equal(result.emailAssetSource, source);
-  assert.equal(result.emailAerialUrl, `https://floor-plan-drawings.onrender.com/assets/email/${assetFilename(source)}`);
+  assert.equal(result.emailAerialUrl, "https://floor-plan-drawings.onrender.com/assets/property-aerial?address=1%20Test%20Street%2C%20Los%20Angeles%2C%20CA");
+  assert.equal(result.emailAerialLink, result.emailAerialUrl);
   assert.equal(await fsp.readFile(path.join(directory, assetFilename(source)), "utf8"), "jpeg-bytes");
 });
 
@@ -51,7 +52,7 @@ test("email asset preparation skips a failed temporary source and uses the next 
 
   assert.equal(calls.length, 2);
   assert.equal(result.emailAssetSource, "https://example.com/fallback.jpg");
-  assert.match(result.emailAerialUrl, /\/assets\/email\/aerial-[a-f0-9]{64}\.jpg$/);
+  assert.match(result.emailAerialUrl, /\/assets\/property-aerial\?address=/);
 });
 
 test("email asset preparation regenerates an expired aerial export", async () => {

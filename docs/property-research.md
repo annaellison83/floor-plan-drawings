@@ -64,6 +64,7 @@ The intake function reads the `Quote Pricing` table on each new job. It chooses 
 - Color Interior uses `Condo Color Interior Base` and is flagged for review when the property is not a condo.
 - Color Interior + Exterior uses `Color + Exterior Starting At`.
 - A requested 3D tour adds the size-band `Matterport Base` when available.
+- For color projects at or above 3,000 sq ft, a provisional linear starting floor of about $0.10/sq ft (rounded to $25 increments) prevents a missing or stale table row from falling back to a small zone minimum. It remains an estimate and Anna must verify the size and approve the final amount.
 
 The result is an internal suggested number for Anna. It is not presented as a detailed client-facing fee breakdown. Travel, multi-unit, commercial, and partial-scope adjustments are called out in `Quote Calculation Notes` until their amounts are configured.
 

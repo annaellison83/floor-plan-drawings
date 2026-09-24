@@ -61,7 +61,7 @@ test("internal quote emails provide a clean client draft without changing native
   assert.match(email.clientReplyMailtoUrl, /^mailto:client@example\.com\?/);
   assert.match(email.html, /Draft Reply on Desktop/);
   assert.match(email.html, /Draft Reply on iPhone/);
-  assert.match(email.html, /plain text; edit before sending/);
+  assert.match(email.html, /fallback buttons open a new draft/);
   assert.doesNotMatch(email.html, /Open in Gmail app/);
   assert.match(email.html, /font-weight:700;">Client/);
   assert.match(email.html, /font-weight:700;">Service/);
@@ -97,7 +97,7 @@ test("internal quote email uses the signed formatted-draft link when available",
   assert.match(email.html, /Draft Reply on Desktop/);
   assert.match(email.html, /Draft Reply on iPhone/);
   assert.match(email.html, /client-draft%3Ftoken=test-token|client-draft\?token=test-token/);
-  assert.match(email.html, /Creates a formatted Gmail draft/);
+  assert.match(email.html, /Both buttons open the saved, formatted Gmail draft/);
 });
 
 test("approved client quote can include appointment options", () => {
@@ -266,7 +266,7 @@ test("canonical review email falls back to a working map link when aerial assets
     mapUrl: "https://utility.arcgisonline.com/arcgis/rest/directories/arcgisoutput/expired.jpg"
   });
   assert.doesNotMatch(html, /utility\.arcgisonline\.com\/arcgisoutput/);
-  assert.match(html, /Preview unavailable/);
-  assert.match(html, /Open aerial view/);
+  assert.match(html, /assets\/property-aerial\?address=/);
+  assert.match(html, /Aerial view/);
   assert.match(html, /google\.com\/maps\/search/);
 });
