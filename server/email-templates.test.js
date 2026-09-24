@@ -62,6 +62,7 @@ test("internal quote emails provide a clean client draft without changing native
   assert.match(email.html, /Draft Reply on Desktop/);
   assert.match(email.html, /Draft Reply on iPhone/);
   assert.match(email.html, /fallback buttons open a new draft/);
+  assert.match(email.html, /googlegmail:\/\/co\?/);
   assert.doesNotMatch(email.html, /Open in Gmail app/);
   assert.match(email.html, /font-weight:700;">Client/);
   assert.match(email.html, /font-weight:700;">Service/);
