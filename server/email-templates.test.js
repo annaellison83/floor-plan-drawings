@@ -26,12 +26,31 @@ test("client quote email contains one approved amount and escapes client data", 
     propertyAddress: "123 Main St",
     service: "Color Interior + Exterior",
     scope: "Main house",
-    finalQuote: 365
+    finalQuote: 365,
+    verifiedSqFt: 2400
   });
-  assert.equal(email.subject, "Your floor plan quote - 123 Main St");
+  assert.equal(email.subject, "Floor plan quote for 123 Main St");
+  assert.match(email.html, /We charge by the square foot/);
+  assert.match(email.html, /approximately 2,400 sq ft/);
   assert.match(email.html, /\$365/);
   assert.doesNotMatch(email.html, /<script>/);
-  assert.match(email.text, /Quote: \$365/);
+  assert.match(email.text, /Color floor plan: \$365/);
+});
+
+test("client quote copy includes B&W and color pricing when both are available", () => {
+  const email = clientQuoteEmail({
+    clientName: "Eric",
+    propertyAddress: "123 Main St",
+    service: "Color Interior + Exterior",
+    verifiedSqFt: 3300,
+    blackWhiteQuote: 295,
+    colorQuote: 395,
+    nextAvailable: "Tuesday at 11:00 AM"
+  });
+  assert.match(email.subject, /^Floor plan quote for 123 Main St$/);
+  assert.match(email.text, /Black-and-white floor plan: \$295/);
+  assert.match(email.text, /Color floor plan: \$395/);
+  assert.match(email.text, /Our next available appointment is Tuesday at 11:00 AM/);
 });
 
 test("role clarification email stays internal and asks for an explicit role", () => {
@@ -72,10 +91,10 @@ test("internal quote emails provide a clean client draft without changing native
   assert.match(email.html, /font-weight:700;">Notes/);
   const draft = new URL(email.clientReplyUrl);
   assert.equal(draft.searchParams.get("to"), "client@example.com");
-  assert.equal(draft.searchParams.get("su"), "FloorPlanDrawings quote | 123 Main St");
-  assert.match(draft.searchParams.get("body"), /Property size: 1,343 sq ft/);
-  assert.match(draft.searchParams.get("body"), /Quote: \$345/);
-  assert.match(draft.searchParams.get("body"), /Please include the detached garage/);
+  assert.equal(draft.searchParams.get("su"), "Floor plan quote for 123 Main St");
+  assert.match(draft.searchParams.get("body"), /approximately 1,343 sq ft/);
+  assert.match(draft.searchParams.get("body"), /Color floor plan: \$345/);
+  assert.match(draft.searchParams.get("body"), /Regarding your note: Please include the detached garage/);
   assert.doesNotMatch(draft.searchParams.get("body"), /Internal pricing note|Suggested quote|Zone/);
   assert.match(email.text, /Draft a clean client reply:/);
 
@@ -84,7 +103,7 @@ test("internal quote emails provide a clean client draft without changing native
     clientEmail: "client@example.com",
     suggestedQuote: 345
   }).clientReplyUrl);
-  assert.match(automaticQuoteDraft.searchParams.get("body"), /Quote: \$345/);
+  assert.match(automaticQuoteDraft.searchParams.get("body"), /Floor plan: \$345/);
 });
 
 test("internal quote email uses the signed formatted-draft link when available", () => {
@@ -271,7 +290,7 @@ test("new requests and quote-ready emails share the canonical review canvas", ()
   }
   assert.ok(quote.html.indexOf('class="reply"') > quote.html.indexOf('class="property-images"'));
   assert.equal(quote.subject.startsWith("FloorPlanDrawings | QUOTE READY"), true);
-  assert.equal(request.subject.startsWith("FloorPlanDrawings | NEW REQUEST"), true);
+  assert.equal(request.subject.startsWith("FloorPlanDrawings | QUOTE REQUEST"), true);
   assert.equal(quote.html.replace(/QUOTE READY/g, "REVIEW").includes("NEW REQUEST"), false);
   assert.match(request.html, /Eric Greenburg/);
 });

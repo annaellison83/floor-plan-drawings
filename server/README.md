@@ -3,13 +3,17 @@
 This service is the Render workflow engine for the FloorPlanDrawings site.
 Netlify remains the public intake website and Airtable remains the dashboard and
 source of truth. Render currently sends QUOTE READY, approved client quotes,
-NEW REQUEST, PROPERTY REVIEW NEEDED, and the daily FOLLOW-UP digest with
+QUOTE REQUEST, QUOTE READY, PROPERTY REVIEW NEEDED, and the daily FOLLOW-UP digest with
 idempotent Communication Log reservations. It does not create calendar events.
 Internal review emails use the compact quote layout, label the automatic price
 as **Auto quote**, and attach the cached aerial image inline so Gmail can display
 it without waiting on a remote image request. Appointment confirmation emails
 are intentionally disabled for now; reminders and the experimental availability
 board remain separately controlled.
+Incoming quote requests use the subject `QUOTE REQUEST | [address]`. The
+client draft and approved client email use `Floor plan quote for [address]` and
+describe square-foot pricing, separate B&W/color amounts when available, and
+optional scheduling language without exposing internal review notes.
 Client-note normalization is staged behind `ENABLE_NOTE_TRANSLATION=false` and
 must be reviewed through the read-only
 `GET /api/airtable/note-translation-preview` endpoint before enabling writes.
@@ -249,7 +253,7 @@ pause those notices without disabling intake.
 
 Set `ENABLE_GMAIL_INTAKE_NOTIFICATIONS=true` only after reviewing one manual
 poll. For each labeled message with an extracted property address, Render then
-sends Anna an internal-only `NEW REQUEST` email using the same responsive quote
+sends Anna an internal-only `QUOTE REQUEST | [address]` email using the same responsive quote
 layout and includes an **Open Gmail thread** link. The message is addressed only
 to `SMTP_USER`; the sender and client are never copied or blind-copied. Render
 also supplies Gmail `In-Reply-To`/`References` headers when available, so Gmail

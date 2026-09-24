@@ -30,7 +30,7 @@ disabled as part of the preparatory work.
    logging is duplicate-safe; automatic inclusion in approved client quotes
    remains disabled with `ENABLE_CLIENT_QUOTE_SCHEDULING=false`, and calendar
    holds remain disabled until explicitly enabled.
-11. NEW REQUEST, PROPERTY REVIEW NEEDED, and FOLLOW-UP are live on Render with
+11. QUOTE REQUEST, PROPERTY REVIEW NEEDED, and FOLLOW-UP are live on Render with
    per-workflow shadow flags false. Their Airtable sender automations remain
    intact as a reversible rollback path and must be paused (not deleted) in
    Airtable after Anna confirms Render delivery.
@@ -52,7 +52,7 @@ disabled as part of the preparatory work.
     disabled-by-default note-normalization preview that preserves Client Notes
     and proposes structured internal review flags before writing Quote
     Calculation Notes.
-15. Internal quote and new-request emails now attach the cached aerial image
+15. Internal quote and quote-request emails now attach the cached aerial image
     inline for immediate Gmail display and call the automatic price **Auto
     quote**. The separate appointment-confirmation workflow is paused because
     its messages were adding inbox noise; reminders and the experimental

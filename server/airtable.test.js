@@ -34,7 +34,7 @@ test("builds an approved-client quote log payload", () => {
   const fields = clientQuoteLogFields({
     recordId: "rec08dRgUXUMPajMt",
     clientName: "Eric",
-    subject: "Your floor plan quote - 123 Main St"
+    subject: "Floor plan quote for 123 Main St"
   });
   assert.equal(fields.Communication, "rec08dRgUXUMPajMt:approved_quote:v1");
   assert.equal(fields["Event Type"], "Quote Sent");

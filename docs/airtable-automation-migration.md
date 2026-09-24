@@ -65,7 +65,7 @@ layout, inline styles, plain-text alternatives, and explicit top labels.
 
 Required top labels:
 
-- `NEW REQUEST`
+- `QUOTE REQUEST`
 - `QUOTE READY`
 - `PROPERTY REVIEW NEEDED`
 - `FOLLOW-UP`

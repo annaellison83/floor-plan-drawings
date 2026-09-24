@@ -66,6 +66,8 @@ function mapJob(record, options = {}) {
     realtorSqFt: first(fields, ["Realtor Sq Ft", "Realtor.com Sq Ft", "Realtor Square Feet"]),
     homesSqFt: first(fields, ["Homes.com Sq Ft", "Homes Sq Ft"]),
     suggestedQuote: first(fields, ["Suggested Quote", "Quote Estimate", "Quote Amount"]),
+    blackWhiteQuote: first(fields, ["Black & White Quote", "Black and White Quote", "B&W Quote", "B&W Client Quote"]),
+    colorQuote: first(fields, ["Color Quote", "Color Client Quote", "Color Interior Quote", "Color Interior + Exterior Quote"]),
     // Keep the client-facing amount separate from the internal suggestion. A
     // clean reply draft may use this value, while never leaking quote notes or
     // a merely suggested amount to the client by accident.
@@ -76,6 +78,7 @@ function mapJob(record, options = {}) {
     quoteSentDate: first(fields, ["Quote Sent Date"]),
     appointmentDateTime: first(fields, ["Appointment Date/Time", "Appointment Start", "Appointment Date"]),
     appointmentStart: first(fields, ["Appointment Start", "Appointment Date/Time"]),
+    nextAvailable: first(fields, ["Next Available Appointment", "Next Available", "Proposed Appointment"]),
     deliveryDate: first(fields, ["Delivery Date", "Drawing Due Date"]),
     accessInfo: first(fields, ["Access Info", "Access Details"]),
     clientResponse: first(fields, ["Client Response"]),

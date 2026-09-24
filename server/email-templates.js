@@ -59,36 +59,77 @@ function clientFacingQuote(job) {
   return value === undefined ? "" : money(value);
 }
 
+function numericQuote(value) {
+  const parsed = Number(String(value ?? "").replace(/[$,]/g, "").trim());
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function quoteBreakdown(job = {}) {
+  const explicitFinal = numericQuote(job.clientFacingQuote ?? job.presentedQuote ?? job.approvedQuote ?? job.finalQuote);
+  const calculatedFinal = explicitFinal === null ? quotePricing(job).finalPrice : null;
+  const final = explicitFinal ?? calculatedFinal;
+  let blackWhite = numericQuote(job.blackWhiteQuote);
+  let color = numericQuote(job.colorQuote);
+  const service = text(job.service, "").toLowerCase();
+  if (blackWhite === null && color === null && final !== null) {
+    if (/black\s*(?:&|and)?\s*white|b\s*[/&+]\s*w/.test(service)) blackWhite = final;
+    else if (/color/.test(service)) color = final;
+  }
+  return { blackWhite, color, final };
+}
+
+function clientServiceLabel(service) {
+  const value = text(service, "Floor plan").toLowerCase();
+  if (/black\s*(?:&|and)?\s*white|b\s*[/&+]\s*w/.test(value)) return "Black-and-white floor plan";
+  if (/color/.test(value)) return "Color floor plan";
+  return "Floor plan";
+}
+
+function clientQuoteLines(job = {}) {
+  const breakdown = quoteBreakdown(job);
+  const lines = [];
+  if (breakdown.blackWhite !== null) lines.push(["Black-and-white floor plan", money(breakdown.blackWhite)]);
+  if (breakdown.color !== null) lines.push(["Color floor plan", money(breakdown.color)]);
+  if (!lines.length && breakdown.final !== null) lines.push([clientServiceLabel(job.service), money(breakdown.final)]);
+  return lines;
+}
+
+function clientSizePhrase(job = {}) {
+  const squareFootage = resolveSquareFootage(job);
+  return squareFootage.value ? `approximately ${squareFootage.value.toLocaleString()} sq ft` : "the current estimated size";
+}
+
+function clientSchedulingPhrase(job = {}) {
+  return text(job.nextAvailable || job.nextAvailableAppointment || job.proposedAppointment || "", "");
+}
+
 function clientReplyDraft(job) {
   const name = text(job.clientName, "there");
   const address = text(job.propertyAddress, "the property");
-  const squareFootage = resolveSquareFootage(job);
-  // Seed the client draft with the automatic quote when Anna has not entered
-  // an approved/presented amount yet. She can edit the number before sending.
-  const quote = clientFacingQuote(job) || (() => {
-    const calculated = quotePricing(job).finalPrice;
-    return calculated === null ? "" : money(calculated);
-  })();
-  const details = [job.service && `Service: ${text(job.service)}`, job.scope && `Scope: ${text(job.scope)}`, `Property size: ${squareFootage.label}`, quote ? `Quote: ${quote}` : "Quote: [Add the amount Anna wants to present]"];
+  const pricingLines = clientQuoteLines(job);
   const clientNote = text(job.clientNotes || job.originalRequest, "").slice(0, 2400);
-  return `Hi ${name},\n\nThanks for reaching out about ${address}.\n\n${details.join("\n")}\n${clientNote ? `\nYour note: ${clientNote}\n` : ""}\n[Add or edit any message before sending.]\n\nBest,\nAnna`;
+  const nextAvailable = clientSchedulingPhrase(job);
+  const pricing = pricingLines.length ? pricingLines.map(([label, amount]) => `${label}: ${amount}`).join("\n") : "[Add the amount you want to present]";
+  return `Hi ${name},\n\nWe charge by the square foot. Based on ${clientSizePhrase(job)} at ${address}, pricing would be:\n\n${pricing}\n${job.scope ? `\nScope: ${text(job.scope)}\n` : ""}${clientNote ? `\nRegarding your note: ${clientNote}\n` : ""}${nextAvailable ? `\nOur next available appointment is ${nextAvailable}. Let me know if you would like to schedule.\n` : "\nIf you would like to move forward, reply with your preferred appointment day/time and access details, and we will confirm it.\n"}\nLet me know if you would like to see examples or have any questions.\n\nBest,\nAnna`;
 }
 
 function clientReplyHtml(job) {
   const name = text(job.clientName, "there");
   const address = text(job.propertyAddress, "the property");
-  const squareFootage = resolveSquareFootage(job);
-  const quote = clientFacingQuote(job) || (() => {
-    const calculated = quotePricing(job).finalPrice;
-    return calculated === null ? "" : money(calculated);
-  })();
+  const pricingLines = clientQuoteLines(job);
   const clientNote = text(job.clientNotes || job.originalRequest, "").slice(0, 2400);
+  const nextAvailable = clientSchedulingPhrase(job);
   const row = (label, value) => value ? `<tr><td style="padding:6px 16px 6px 0;color:#53635c;font-size:13px;line-height:19px;font-weight:700;vertical-align:top;">${escapeHtml(label)}</td><td style="padding:6px 0;color:#22332e;font-size:14px;line-height:20px;">${escapeHtml(value)}</td></tr>` : "";
-  return `<!doctype html><html><body style="margin:0;background:#f3f1eb;color:#22332e;font-family:Arial,Helvetica,sans-serif;"><div style="max-width:680px;margin:0 auto;padding:24px 16px;"><div style="background:#fbf8f1;border:1px solid #ddd7ca;border-radius:14px;padding:26px;"><div style="color:#53635c;font-size:11px;line-height:16px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;">FloorPlanDrawings</div><p style="margin:16px 0 0;font-size:16px;line-height:25px;">Hi ${escapeHtml(name)},</p><p style="margin:14px 0 18px;font-size:16px;line-height:25px;">Thanks for reaching out about ${escapeHtml(address)}.</p><table role="presentation" width="100%" cellspacing="0" cellpadding="0">${row("Property", address)}${row("Service", [job.service, job.scope].filter(Boolean).join(" · "))}${row("Property size", squareFootage.label)}${quote ? row("Quote", quote) : ""}${clientNote ? row("Your note", clientNote) : ""}</table><p style="margin:20px 0 0;font-size:14px;line-height:22px;">[Add or edit any message before sending.]</p><p style="margin:20px 0 0;font-size:16px;line-height:25px;">Best,<br>Anna</p></div></div></body></html>`;
+  const quoteRows = pricingLines.map(([label, amount]) => row(label, amount)).join("");
+  const pricingFallback = quoteRows || row("Pricing", "Add the amount you want to present");
+  const scheduling = nextAvailable
+    ? `Our next available appointment is ${escapeHtml(nextAvailable)}. Let me know if you would like to schedule.`
+    : "If you would like to move forward, reply with your preferred appointment day/time and access details, and we will confirm it.";
+  return `<!doctype html><html><body style="margin:0;background:#f3f1eb;color:#22332e;font-family:Arial,Helvetica,sans-serif;"><div style="max-width:680px;margin:0 auto;padding:24px 16px;"><div style="background:#fbf8f1;border:1px solid #ddd7ca;border-radius:14px;padding:26px;"><div style="color:#53635c;font-size:11px;line-height:16px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;">FloorPlanDrawings</div><p style="margin:16px 0 0;font-size:16px;line-height:25px;">Hi ${escapeHtml(name)},</p><p style="margin:14px 0 18px;font-size:16px;line-height:25px;">We charge by the square foot. Based on ${escapeHtml(clientSizePhrase(job))} at ${escapeHtml(address)}, pricing would be:</p><table role="presentation" width="100%" cellspacing="0" cellpadding="0">${pricingFallback}${job.scope ? row("Scope", text(job.scope)) : ""}${clientNote ? row("Regarding your note", clientNote) : ""}</table><p style="margin:20px 0 0;font-size:16px;line-height:25px;">${scheduling}</p><p style="margin:14px 0 0;font-size:16px;line-height:25px;">Let me know if you would like to see examples or have any questions.</p><p style="margin:20px 0 0;font-size:16px;line-height:25px;">Best,<br>Anna</p></div></div></body></html>`;
 }
 
 function buildClientReplySubject(job) {
-  return `FloorPlanDrawings quote | ${text(job.propertyAddress)}`;
+  return `Floor plan quote for ${text(job.propertyAddress)}`;
 }
 
 function escapeHtml(value) {
@@ -320,14 +361,21 @@ function clientQuoteEmail(job, proposalUrl = "", slots = []) {
   const name = text(job.clientName, "there");
   const address = text(job.propertyAddress);
   const service = text(job.service, "Floor plan drawing");
-  const scope = text(job.scope, "As requested");
-  const quote = money(job.finalQuote);
-  const subject = `Your floor plan quote - ${address}`;
-  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0;padding:0;background:#f3f1eb;color:#22332e;font-family:Arial,Helvetica,sans-serif;"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f3f1eb;"><tr><td style="padding:24px 12px;"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:680px;margin:0 auto;background:#fbf8f1;border:1px solid #ddd7ca;border-radius:18px;"><tr><td style="padding:38px 32px;"><div style="color:#53635c;font-size:12px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;">FloorPlanDrawings</div><h1 style="margin:14px 0 18px;font-size:30px;line-height:38px;color:#173f36;">Your floor plan quote</h1><p style="font-size:16px;line-height:25px;margin:0 0 20px;">Hi ${escapeHtml(name)},</p><p style="font-size:16px;line-height:25px;margin:0 0 22px;">Thanks for reaching out to FloorPlanDrawings. Anna reviewed your request and approved the following quote.</p><div style="background:#b8c9ae;border-radius:14px;padding:24px;"><div style="font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#53635c;">Property</div><div style="margin-top:8px;font-size:22px;line-height:30px;font-weight:700;">${escapeHtml(address)}</div><div style="margin-top:16px;font-size:15px;line-height:24px;"><strong>Service:</strong> ${escapeHtml(service)}<br><strong>Scope:</strong> ${escapeHtml(scope)}</div><div style="margin-top:20px;font-size:34px;line-height:40px;font-weight:700;color:#173f36;">${escapeHtml(quote)}</div></div><p style="font-size:16px;line-height:25px;margin:24px 0 0;">If you would like to move forward, reply to this email with your preferred appointment day/time and access details. We will confirm the appointment after we hear back.</p><p style="font-size:16px;line-height:25px;margin:24px 0 0;">Thank you,<br>FloorPlanDrawings</p></td></tr></table></td></tr></table></body></html>`;
+  const quoteLines = clientQuoteLines(job);
+  const sizePhrase = clientSizePhrase(job);
+  const nextAvailable = clientSchedulingPhrase(job);
+  const subject = `Floor plan quote for ${address}`;
+  const quoteRows = quoteLines.length
+    ? quoteLines.map(([label, amount]) => `<tr><td style="padding:10px 0;border-top:1px solid #cbd7c5;color:#394842;font-size:16px;line-height:23px;">${escapeHtml(label)}</td><td style="padding:10px 0;border-top:1px solid #cbd7c5;text-align:right;color:#173f36;font-size:16px;line-height:23px;font-weight:700;">${escapeHtml(amount)}</td></tr>`).join("")
+    : `<tr><td style="padding:10px 0;border-top:1px solid #cbd7c5;color:#394842;font-size:16px;line-height:23px;">Floor plan</td><td style="padding:10px 0;border-top:1px solid #cbd7c5;text-align:right;color:#173f36;font-size:16px;line-height:23px;font-weight:700;">To be confirmed</td></tr>`;
+  const schedulingCopy = nextAvailable
+    ? `Our next available appointment is ${escapeHtml(nextAvailable)}. Let me know if you would like to schedule.`
+    : "If you would like to move forward, reply to this email with your preferred appointment day/time and access details, and we will confirm it.";
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0;padding:0;background:#f3f1eb;color:#22332e;font-family:Arial,Helvetica,sans-serif;"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f3f1eb;"><tr><td style="padding:24px 12px;"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:680px;margin:0 auto;background:#fbf8f1;border:1px solid #ddd7ca;border-radius:18px;"><tr><td style="padding:38px 32px;"><div style="color:#53635c;font-size:12px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;">FloorPlanDrawings</div><h1 style="margin:14px 0 18px;font-size:30px;line-height:38px;color:#173f36;">Floor plan quote</h1><p style="font-size:16px;line-height:25px;margin:0 0 20px;">Hi ${escapeHtml(name)},</p><p style="font-size:16px;line-height:25px;margin:0 0 22px;">We charge by the square foot. Based on ${escapeHtml(sizePhrase)} at ${escapeHtml(address)}, pricing would be:</p><div style="background:#b8c9ae;border-radius:14px;padding:24px;"><div style="font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#53635c;">Property</div><div style="margin-top:8px;font-size:22px;line-height:30px;font-weight:700;">${escapeHtml(address)}</div><div style="margin-top:16px;font-size:15px;line-height:24px;"><strong>Service:</strong> ${escapeHtml(service)}${job.scope ? `<br><strong>Scope:</strong> ${escapeHtml(job.scope)}` : ""}</div><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-top:18px;">${quoteRows}</table></div><p style="font-size:16px;line-height:25px;margin:24px 0 0;">${schedulingCopy}</p><p style="font-size:16px;line-height:25px;margin:14px 0 0;">Let me know if you would like to see examples or have any questions.</p><p style="font-size:16px;line-height:25px;margin:24px 0 0;">Thank you,<br>Anna</p></td></tr></table></td></tr></table></body></html>`;
   const options = (Array.isArray(slots) ? slots : []).slice(0, 5);
   const appointmentPanel = proposalUrl ? `<div style="margin-top:24px;padding:20px;background:#e3eadf;border-radius:14px;"><div style="font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#53635c;">Appointment options</div><p style="font-size:16px;line-height:25px;margin:10px 0 14px;color:#394842;">Choose a preferred time and we will re-check availability before confirming it.</p>${options.map((slot, index) => `<div style="padding:10px 0;border-top:1px solid #cbd7c5;font-size:15px;line-height:23px;color:#394842;"><strong>Option ${index + 1}:</strong> ${escapeHtml(formatSlot(slot))}</div>`).join("")}<div style="text-align:center;margin-top:16px;"><a href="${escapeHtml(proposalUrl)}" style="display:inline-block;background:#173f36;color:#fff!important;text-decoration:none;border-radius:9px;padding:14px 22px;font-size:16px;line-height:21px;font-weight:700;">Choose an appointment time</a></div></div>` : "";
   const renderedHtml = proposalUrl ? html.replace("</body>", `${appointmentPanel}</body>`) : html;
-  const plainText = [`Hi ${name},`, "Thanks for reaching out to FloorPlanDrawings. Anna reviewed your request and approved the following quote.", `Property: ${address}`, `Service: ${service}`, `Scope: ${scope}`, `Quote: ${quote}`, options.length && options.map((slot, index) => `Option ${index + 1}: ${formatSlot(slot)}`).join("\n"), proposalUrl && `Choose an appointment time: ${proposalUrl}`, "If you would like to move forward, reply to this email with access details. We will confirm the appointment after we hear back.", "Thank you,\nFloorPlanDrawings"].filter(Boolean).join("\n\n");
+  const plainText = [`Hi ${name},`, `We charge by the square foot. Based on ${sizePhrase} at ${address}, pricing would be:`, quoteLines.length ? quoteLines.map(([label, amount]) => `${label}: ${amount}`).join("\n") : "Floor plan: To be confirmed", `Service: ${service}`, job.scope && `Scope: ${job.scope}`, options.length && options.map((slot, index) => `Option ${index + 1}: ${formatSlot(slot)}`).join("\n"), proposalUrl && `Choose an appointment time: ${proposalUrl}`, nextAvailable ? `Our next available appointment is ${nextAvailable}. Let me know if you would like to schedule.` : "If you would like to move forward, reply to this email with access details, and we will confirm it.", "Let me know if you would like to see examples or have any questions.", "Thank you,\nAnna"].filter(Boolean).join("\n\n");
   return { subject, html: renderedHtml, text: plainText };
 }
 
@@ -425,7 +473,7 @@ function internalEmailShell(label, title, intro, bodyHtml, bodyText) {
 }
 
 function newRequestEmail(job) {
-  return canonicalReviewEmail(job, { label: "NEW REQUEST", title: text(job.clientName, "New website request") });
+  return canonicalReviewEmail(job, { label: "QUOTE REQUEST", title: text(job.clientName, "New quote request") });
   /* Legacy implementation retained below until the next cleanup pass. */
   const address = text(job.propertyAddress);
   const pricing = quotePricing(job);
