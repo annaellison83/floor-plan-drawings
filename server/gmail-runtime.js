@@ -166,7 +166,7 @@ function isLikelyFloorPlanIntake(message = {}) {
   const subject = clean(message.subject);
   const text = clean(message.text || message.snippet);
   if (message.contacts && message.contacts.source && message.contacts.source.role === "agent") return false;
-  if (/^(?:floorplandrawings|fpd)\s+quote\b/i.test(subject) || /\bquote\s+ready\b/i.test(subject)) return false;
+  if (/^(?:floorplandrawings|fpd|floor\s+plan)\s+quote\b/i.test(subject) || /\bquote\s+ready\b/i.test(subject)) return false;
   if (/^\[TEST\s+—\s+NO\s+WORKFLOW\]/i.test(subject)) return false;
   const attachments = Array.isArray(message.attachmentNames) ? message.attachmentNames.join(" ") : "";
   const searchable = `${subject}\n${text}\n${attachments}`;

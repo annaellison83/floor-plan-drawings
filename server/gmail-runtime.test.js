@@ -55,6 +55,10 @@ test("FPD auto-label heuristic requires a marker plus an address and rejects unr
   assert.equal(isLikelyFloorPlanIntake({ subject: "[TEST — NO WORKFLOW] FloorPlanDrawings | QUOTE READY | 4968 VINCENT AVE LOS ANGELES CA 90041", text: "4968 VINCENT AVE LOS ANGELES CA 90041 floor plan", propertyAddress: "4968 VINCENT AVE LOS ANGELES CA 90041" }), false);
 });
 
+test("Gmail intake ignores outgoing floor plan quote drafts", () => {
+  assert.equal(isLikelyFloorPlanIntake({ subject: "Floor plan quote for 4968 Vincent Ave", text: "Quote: $345", propertyAddress: "4968 Vincent Ave" }), false);
+});
+
 test("parseGmailMessage collects attachment names for intake heuristics", () => {
   const parsed = parseGmailMessage({ id: "m1", payload: { headers: [], parts: [{ mimeType: "application/pdf", filename: "floorplan.pdf", body: {} }] } });
   assert.deepEqual(parsed.attachmentNames, ["floorplan.pdf"]);
