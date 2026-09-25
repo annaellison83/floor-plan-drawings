@@ -63,7 +63,7 @@ async function enrichGmailProperty({ recordId, fields = {}, researchAddress, bui
         aerialAttachmentUrl: attachmentUrl(fields["Aerial Parcel Preview"]),
         mapUrl: isGeneratedPropertyFallback("Aerial Map URL", storedMap, address) || isPropertyAerialProxy(storedMap) ? built["Aerial Map URL"] : (storedMap || built["Aerial Map URL"]),
         satellitePhotoLink: isGeneratedPropertyFallback("Satellite Photo Link", storedSatellite, address) || isPropertyAerialProxy(storedSatellite) ? built["Satellite Photo Link"] : (storedSatellite || built["Satellite Photo Link"])
-      }, { regenerate: false }).catch(() => null);
+      }, { regenerate: true }).catch(() => null);
       assetReady = Boolean(prepared && prepared.emailAerialUrl);
       if (assetReady) {
         if (replaceable("Aerial Map URL", fields["Aerial Map URL"], address, false)) update["Aerial Map URL"] = prepared.emailAerialUrl;
