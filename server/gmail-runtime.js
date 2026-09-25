@@ -165,6 +165,7 @@ const FPD_NON_INTAKE_MARKERS = /\b(?:kaiser|medical|therapy|soul\s*tenders|strip
 function isLikelyFloorPlanIntake(message = {}) {
   const subject = clean(message.subject);
   const text = clean(message.text || message.snippet);
+  if (message.contacts && message.contacts.source && message.contacts.source.role === "agent") return false;
   if (/^\[TEST\s+—\s+NO\s+WORKFLOW\]/i.test(subject)) return false;
   const attachments = Array.isArray(message.attachmentNames) ? message.attachmentNames.join(" ") : "";
   const searchable = `${subject}\n${text}\n${attachments}`;

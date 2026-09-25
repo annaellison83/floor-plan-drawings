@@ -50,6 +50,7 @@ test("FPD auto-label heuristic requires a marker plus an address and rejects unr
   assert.equal(isLikelyFloorPlanIntake({ subject: "NEW JOB: 921 Thayer Avenue", text: "Please let me know your next available date for this home to get measured.", propertyAddress: "921 Thayer Avenue" }), true);
   assert.equal(isLikelyFloorPlanIntake({ subject: "Appointment Confirmation", text: "Kaiser appointment at 4111 Edgehill Drive", propertyAddress: "4111 Edgehill Drive" }), false);
   assert.equal(isLikelyFloorPlanIntake({ subject: "Quick hello", text: "Can you do Tuesday?", propertyAddress: "4111 Edgehill Drive" }), false);
+  assert.equal(isLikelyFloorPlanIntake({ subject: "FloorPlanDrawings quote | 3960 Verdugo View Dr", text: "Please review the quote for this floor plan.", propertyAddress: "3960 Verdugo View Dr", contacts: { source: { role: "agent" } } }), false);
   assert.equal(isLikelyFloorPlanIntake({ subject: "[TEST — NO WORKFLOW] FloorPlanDrawings | QUOTE READY | 4968 VINCENT AVE LOS ANGELES CA 90041", text: "4968 VINCENT AVE LOS ANGELES CA 90041 floor plan", propertyAddress: "4968 VINCENT AVE LOS ANGELES CA 90041" }), false);
 });
 
