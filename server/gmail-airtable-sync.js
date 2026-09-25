@@ -39,6 +39,38 @@ function contactName(contact) {
   return clean(contact && contact.name);
 }
 
+function externalEmail(value) {
+  const email = contactEmail({ email: value });
+  return email && !/annaellison|floorplandrawings|noreply|no-reply/i.test(email) ? email : "";
+}
+
+function inferredClientContact(message = {}) {
+  const contacts = message.contacts || {};
+  const configuredClient = firstContact(contacts, "client");
+  if (configuredClient && externalEmail(contactEmail(configuredClient))) return configuredClient;
+  const source = contacts.source;
+  if (source && externalEmail(contactEmail(source))) return source;
+  const unknown = (Array.isArray(contacts.unknown) ? contacts.unknown : [])
+    .filter((contact) => externalEmail(contactEmail(contact)));
+  return unknown.length === 1 ? unknown[0] : null;
+}
+
+function messageContactEmail(message = {}, candidate = null) {
+  const direct = externalEmail(contactEmail(candidate));
+  if (direct) return direct;
+  const matches = [...`${clean(message.subject)}\n${clean(message.text)}`.matchAll(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi)]
+    .map((match) => externalEmail(match[0]))
+    .filter((email, index, values) => email && values.indexOf(email) === index);
+  return matches.length === 1 ? matches[0] : "";
+}
+
+function messageContactPhone(message = {}) {
+  const matches = [...`${clean(message.subject)}\n${clean(message.text)}`.matchAll(/(?:\+?1[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]\d{4}\b/g)]
+    .map((match) => match[0].replace(/\s+/g, " ").trim())
+    .filter((phone, index, values) => phone.replace(/\D/g, "") !== "4436213024" && values.indexOf(phone) === index);
+  return matches.length ? matches[0] : "";
+}
+
 function isAddressLikeClient(value, address = "") {
   const current = clean(value);
   const property = clean(address);
@@ -96,7 +128,7 @@ function gmailAirtableFields(message = {}, project = {}, existing = null) {
   const threadId = normalizeThreadId(message.threadId || project.metadata && project.metadata.gmailThreadId);
   const messageId = clean(message.id || project.metadata && project.metadata.gmailMessageId);
   const addressKey = normalizedPropertyKey(address);
-  const client = firstContact(message.contacts, "client");
+  const client = inferredClientContact(message);
   const agent = firstContact(message.contacts, "agent");
   const body = clean(message.text);
   const subject = clean(message.subject);
@@ -115,14 +147,12 @@ function gmailAirtableFields(message = {}, project = {}, existing = null) {
     "Source Channels": mergedSourceChannels(existing, "gmail")
   }, address);
   const parsedClientName = clean(message.clientName);
-  if (client) {
-    fields["Client Name"] = contactName(client) || parsedClientName || clean(project.clientName);
-    fields["Client Email"] = contactEmail(client);
-  } else if (parsedClientName && !isAddressLikeClient(parsedClientName, address)) {
-    fields["Client Name"] = parsedClientName;
-  } else if (clean(project.clientName) && !isAddressLikeClient(project.clientName, address)) {
-    fields["Client Name"] = clean(project.clientName);
-  }
+  const candidateName = contactName(client) || parsedClientName || clean(project.clientName);
+  if (candidateName && !isAddressLikeClient(candidateName, address)) fields["Client Name"] = candidateName;
+  const candidateEmail = messageContactEmail(message, client);
+  if (candidateEmail) fields["Client Email"] = candidateEmail;
+  const candidatePhone = messageContactPhone(message);
+  if (candidatePhone) fields["Client Phone"] = candidatePhone;
   if (agent) fields["Agent / Company"] = contactName(agent) || contactEmail(agent);
   return Object.fromEntries(Object.entries(fields).filter(([, value]) => clean(value)));
 }

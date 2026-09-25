@@ -59,6 +59,26 @@ test("uses the parsed client name instead of an address-like fallback and repair
   assert.equal(patchMissingGmailFields(record, incoming)["Client Name"], "Deborah Wolsh");
 });
 
+test("uses a single external Gmail sender when no client role is configured", () => {
+  const fields = gmailAirtableFields({
+    id: "msg-unknown-client",
+    threadId: "thread-unknown-client",
+    propertyAddress: "2750 Medlow Ave, Los Angeles, CA 90065",
+    clientName: "",
+    subject: "Floor plan request",
+    text: "Please quote this property. Phone: 310-555-0142",
+    contacts: {
+      source: { name: "Sara Kaye", email: "sara.kaye@example.com" },
+      client: [],
+      agent: [],
+      unknown: [{ name: "Sara Kaye", email: "sara.kaye@example.com" }]
+    }
+  });
+  assert.equal(fields["Client Name"], "Sara Kaye");
+  assert.equal(fields["Client Email"], "sara.kaye@example.com");
+  assert.equal(fields["Client Phone"], "310-555-0142");
+});
+
 test("recognizes generated Gmail property fallbacks as replaceable asset placeholders", () => {
   const address = "1917 Eden Ave, Pasadena, CA 91103";
   const fields = gmailAirtableFields({ propertyAddress: address, threadId: "thread-assets", id: "message-assets", subject: "Floor plans", text: "Please quote this address" });

@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { addressParts, clientQuoteLogFields, communicationKey, inboundCommunicationLogFields, mapJob, quoteReadyLogFields, requestAddressParts } = require("./airtable");
+const { addressParts, clientQuoteLogFields, communicationKey, diagnoseClientData, inboundCommunicationLogFields, mapJob, quoteReadyLogFields, requestAddressParts } = require("./airtable");
 
 test("derives city, state, and zip from a full address", () => {
   assert.deepEqual(addressParts("941 FORTUNE WAY LOS ANGELES CA 90042"), { city: "LOS ANGELES", state: "CA", zip: "90042" });
@@ -31,6 +31,42 @@ test("uses contact details from the original request when Airtable fields are bl
 test("derives a readable client name from a reliable email when no name field exists", () => {
   const job = mapJob({ fields: { "Original Request": "Please schedule this request. Reply to sara.kaye@compass.com." } });
   assert.equal(job.clientName, "Sara Kaye");
+});
+
+test("diagnoses an address copied into the client field", () => {
+  const job = mapJob({ fields: {
+    "Property Address": "2750 Medlow Ave, Los Angeles, CA 90065",
+    "Client Name": "2750 MEDLOW AVE LOS ANGELES CA 90065"
+  }});
+  assert.equal(job.clientDiagnostics.status, "missing");
+  assert.equal(job.clientDiagnostics.addressLike, true);
+  assert.match(job.clientDiagnostics.reason, /property address/i);
+});
+
+test("recovers the named client from the request when Airtable copied the address", () => {
+  const job = mapJob({ fields: {
+    "Property Address": "2750 Medlow Ave, Los Angeles, CA 90065",
+    "Client Name": "2750 MEDLOW AVE LOS ANGELES CA 90065",
+    "Original Request": "Client: Sara Kaye · sara.kaye@example.com"
+  }});
+  assert.equal(job.clientName, "Sara Kaye");
+  assert.equal(job.clientDiagnostics.source, "Original request text");
+});
+
+test("diagnoses a record with contact detail but no client name", () => {
+  const job = mapJob({ fields: {
+    "Property Address": "123 Main St",
+    "Client Email": "client@example.com"
+  }});
+  assert.equal(job.clientDiagnostics.status, "partial");
+  assert.equal(job.clientDiagnostics.hasEmail, true);
+  assert.match(job.clientDiagnostics.reason, /no client name/i);
+});
+
+test("diagnoses a record with no client data", () => {
+  const diagnosis = diagnoseClientData({ propertyAddress: "123 Main St" });
+  assert.deepEqual({ status: diagnosis.status, source: diagnosis.source }, { status: "missing", source: "No client source" });
+  assert.match(diagnosis.reason, /No client name/);
 });
 
 test("maps a Jobs record without exposing credentials", () => {

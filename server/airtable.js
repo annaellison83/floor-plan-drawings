@@ -71,7 +71,11 @@ function requestContactParts(value) {
     .filter((phone, index, values) => values.indexOf(phone) === index)
     .filter((phone) => phone.replace(/\D/g, "") !== "4436213024");
   const explicitName = text.match(/(?:^|\n|\b)(?:client|contact|name|day[- ]of\s+contact)\s*:\s*([^\n|]+)/i);
-  const explicitNameValue = clean(explicitName && explicitName[1]).replace(/(?:\+?1[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]\d{4}\b/g, "").replace(/\s*[·,;-]\s*$/, "").trim();
+  const explicitNameValue = clean(explicitName && explicitName[1])
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "")
+    .replace(/(?:\+?1[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]\d{4}\b/g, "")
+    .split(/\s*[·|;,]\s*/)[0]
+    .trim();
   const emailName = emailMatches[0] && emailMatches[0].split("@")[0].replace(/[._-]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
   return {
     name: clean(parsedClient.name || parsedClient.fullName || explicitNameValue || (!/^(?:info|hello|contact|office|admin|support)$/i.test(emailName || "") && emailName)),
@@ -79,6 +83,55 @@ function requestContactParts(value) {
     phone: clean(parsedClient.phone) || phoneMatches[0] || "",
     emails: emailMatches,
     phones: phoneMatches
+  };
+}
+
+function normalizedClientText(value) {
+  return clean(value).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function isAddressLikeClient(value, address = "") {
+  const client = normalizedClientText(value);
+  const property = normalizedClientText(address);
+  if (!client || !property) return false;
+  if (client === property) return true;
+  const startsWithAddress = client.startsWith(property) || property.startsWith(client);
+  return startsWithAddress && (/(?:\bca\b|\bcalifornia\b|\b\d{5}(?:-\d{4})?\b)/i.test(client) || /\b(?:street|st|avenue|ave|boulevard|blvd|drive|dr|road|rd|lane|ln|court|ct|place|pl|way|parkway|pkwy|circle|cir|terrace|ter|highway|hwy)\b/i.test(client));
+}
+
+function diagnoseClientData({ propertyAddress = "", clientField = "", clientName = "", clientEmail = "", clientPhone = "", requestContact = {} } = {}) {
+  const name = clean(clientName);
+  const email = clean(clientEmail).toLowerCase();
+  const phone = clean(clientPhone);
+  const addressLike = isAddressLikeClient(clientField || name, propertyAddress);
+  const usableName = Boolean(name && !addressLike);
+  const hasEmail = Boolean(email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email));
+  const hasPhone = Boolean(phone && phone.replace(/\D/g, "").length >= 10);
+  const hasContact = hasEmail || hasPhone;
+  const status = usableName && hasContact ? "complete" : usableName || hasContact ? "partial" : "missing";
+  let reason = "";
+  if (addressLike) reason = "The client field repeats the property address, so it is being treated as an address placeholder.";
+  else if (!usableName && !hasContact) reason = "No client name, email, or phone was found in the Airtable record or the original request.";
+  else if (!usableName && hasContact) reason = "A contact detail was found, but no client name was found.";
+  else if (usableName && !hasContact) reason = "A client name was found, but no client email or phone was found.";
+  else reason = "Client name and contact details were found.";
+  const source = clientField && !addressLike
+    ? "Airtable client field"
+    : requestContact.name
+      ? "Original request text"
+      : hasContact
+        ? "Email or phone metadata"
+        : "No client source";
+  return {
+    status,
+    reason,
+    source,
+    addressLike,
+    hasName: usableName,
+    hasEmail,
+    hasPhone,
+    candidateEmails: Array.isArray(requestContact.emails) ? requestContact.emails : [],
+    candidatePhones: Array.isArray(requestContact.phones) ? requestContact.phones : []
   };
 }
 
@@ -102,9 +155,15 @@ function mapJob(record, options = {}) {
   const verifiedSqFt = Number(first(fields, ["Verified Sq Ft", "Verified Square Feet"]));
   const propertyAddress = first(fields, ["Full Address", "Property Address", "Address"]);
   const originalRequest = first(fields, ["Original Request", "Client Message", "Client Request"]);
+  const clientField = first(fields, ["Client Name", "Name"]);
+  const clientEmailField = first(fields, ["Client Email", "Email"]);
+  const clientPhoneField = first(fields, ["Client Phone", "Phone"]);
   const derivedAddress = addressParts(propertyAddress);
   const requestParts = requestAddressParts(originalRequest);
   const requestContact = requestContactParts(originalRequest);
+  const mappedClientName = (clientField && !isAddressLikeClient(clientField, propertyAddress)) ? clientField : (requestContact.name || clientField);
+  const mappedClientEmail = clientEmailField || requestContact.email;
+  const mappedClientPhone = clientPhoneField || requestContact.phone;
   const detailFields = Object.fromEntries(Object.entries(fields)
     .filter(([key, value]) => value !== "" && value !== null && value !== undefined && !/(token|secret|password)/i.test(key))
     .map(([key, value]) => [key, detailValue(value)]));
@@ -115,9 +174,17 @@ function mapJob(record, options = {}) {
     city: first(fields, ["City", "Town", "Municipality"]) || derivedAddress.city || requestParts.city,
     state: first(fields, ["State", "State/Province"]) || derivedAddress.state || requestParts.state,
     zip: first(fields, ["Zip", "Zip Code", "Postal Code"]) || derivedAddress.zip || requestParts.zip,
-    clientName: first(fields, ["Client Name", "Name"]) || requestContact.name,
-    clientEmail: first(fields, ["Client Email", "Email"]) || requestContact.email,
-    clientPhone: first(fields, ["Client Phone", "Phone"]) || requestContact.phone,
+    clientName: mappedClientName,
+    clientEmail: mappedClientEmail,
+    clientPhone: mappedClientPhone,
+    clientDiagnostics: diagnoseClientData({
+      propertyAddress,
+      clientField,
+      clientName: mappedClientName,
+      clientEmail: mappedClientEmail,
+      clientPhone: mappedClientPhone,
+      requestContact
+    }),
     contactEmails: requestContact.emails,
     contactPhones: requestContact.phones,
     detailFields,
@@ -597,6 +664,7 @@ module.exports = {
   createQuoteReadyLog,
   createNotificationLog,
   createInboundCommunicationLog,
+  diagnoseClientData,
   findClientQuoteDeliveries,
   findAppointmentProposalDeliveries,
   findQuoteReadyDeliveries,
@@ -611,6 +679,7 @@ module.exports = {
   listNoteTranslationCandidates,
   listPropertyReviewCandidates,
   listQuoteReadyCandidates,
+  isAddressLikeClient,
   mapJob,
   notificationLogFields,
   inboundCommunicationLogFields,
