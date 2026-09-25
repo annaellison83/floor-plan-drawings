@@ -70,9 +70,11 @@ function requestContactParts(value) {
     .map((match) => match[0].replace(/\s+/g, " ").trim())
     .filter((phone, index, values) => values.indexOf(phone) === index)
     .filter((phone) => phone.replace(/\D/g, "") !== "4436213024");
-  const explicitName = text.match(/(?:^|\n)\s*(?:client|contact|name)\s*:\s*([^\n|]+)/i);
+  const explicitName = text.match(/(?:^|\n|\b)(?:client|contact|name|day[- ]of\s+contact)\s*:\s*([^\n|]+)/i);
+  const explicitNameValue = clean(explicitName && explicitName[1]).replace(/(?:\+?1[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]\d{4}\b/g, "").replace(/\s*[·,;-]\s*$/, "").trim();
+  const emailName = emailMatches[0] && emailMatches[0].split("@")[0].replace(/[._-]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
   return {
-    name: clean(parsedClient.name || parsedClient.fullName || explicitName && explicitName[1]),
+    name: clean(parsedClient.name || parsedClient.fullName || explicitNameValue || (!/^(?:info|hello|contact|office|admin|support)$/i.test(emailName || "") && emailName)),
     email: clean(parsedClient.email) || emailMatches[0] || "",
     phone: clean(parsedClient.phone) || phoneMatches[0] || "",
     emails: emailMatches,

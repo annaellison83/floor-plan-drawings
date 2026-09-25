@@ -28,6 +28,11 @@ test("uses contact details from the original request when Airtable fields are bl
   assert.deepEqual(job.detailFields, { "Property Address": "123 Main St", "Original Request": job.originalRequest });
 });
 
+test("derives a readable client name from a reliable email when no name field exists", () => {
+  const job = mapJob({ fields: { "Original Request": "Please schedule this request. Reply to sara.kaye@compass.com." } });
+  assert.equal(job.clientName, "Sara Kaye");
+});
+
 test("maps a Jobs record without exposing credentials", () => {
   const job = mapJob({
     id: "rec08dRgUXUMPajMt",
