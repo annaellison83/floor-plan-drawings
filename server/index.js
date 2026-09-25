@@ -515,6 +515,10 @@ async function backfillGmailProjectsToAirtable(client, airtableRecords, results)
     try {
       const raw = await client.getMessage(messageId);
       const parsed = parseGmailMessage(raw, { agentEmails: client.config.agentEmails, clientEmails: client.config.clientEmails });
+      if (!isLikelyFloorPlanIntake(parsed)) {
+        results.push({ messageId, threadId, backfill: true, action: "skipped", reason: "Heuristic did not meet address + FPD marker threshold" });
+        continue;
+      }
       const synced = await syncGmailMessageToAirtable(parsed, project, airtableRecords);
       let communicationLogged = false;
       if (synced.recordId) {
