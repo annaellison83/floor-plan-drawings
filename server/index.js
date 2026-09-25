@@ -792,6 +792,14 @@ async function pollGmailIntake() {
     client,
     store,
     onMessage: async (message) => {
+      // The intake label can contain outgoing quote drafts or other mail that
+      // was labeled manually. Keep the same intake heuristic at the ingestion
+      // boundary so those messages never become jobs even if they are already
+      // in the labeled queue.
+      if (!isLikelyFloorPlanIntake(message)) {
+        airtableSync.push({ messageId: message.id, threadId: message.threadId, action: "skipped", reason: "Heuristic did not meet address + FPD marker threshold" });
+        return null;
+      }
       const project = await ingestGmailMessage(message);
       if (gmailAirtableSyncEnabled()) {
         const synced = await syncGmailMessageToAirtable(message, project, airtableRecords);
