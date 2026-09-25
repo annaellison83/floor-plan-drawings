@@ -2070,6 +2070,8 @@ async function route(req, res) {
       const requested = body && body.fields && typeof body.fields === "object" ? body.fields : {};
       const allowedFields = [
         "Client Name",
+        "Client Email",
+        "Client Phone",
         "Status",
         "Assigned Measurer",
         "Approx Sq Ft",

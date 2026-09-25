@@ -23,6 +23,73 @@ function attachmentUrl(value) {
   return clean(attachment && (attachment.url || (attachment.thumbnails && attachment.thumbnails.full && attachment.thumbnails.full.url)));
 }
 
+function addressParts(value) {
+  const text = clean(value).replace(/\s+/g, " ").trim();
+  if (!text) return {};
+  const match = text.match(/\b(CA|California)\s*,?\s*(\d{5}(?:-\d{4})?)\b/i);
+  if (!match) return {};
+  const before = text.slice(0, match.index).replace(/[\s,]+$/, "").trim();
+  const commaParts = before.split(",").map((part) => part.trim()).filter(Boolean);
+  let city = commaParts.length > 1 ? commaParts[commaParts.length - 1] : "";
+  if (!city) {
+    const street = before.match(/^(.*?\b(?:street|st|avenue|ave|boulevard|blvd|drive|dr|road|rd|lane|ln|court|ct|place|pl|way|parkway|pkwy|circle|cir|terrace|ter|highway|hwy)\b)(?:\s+|,)+(.*?)$/i);
+    city = street && street[2] ? street[2].trim() : "";
+  }
+  return { city, state: /^California$/i.test(match[1]) ? "CA" : match[1].toUpperCase(), zip: match[2] };
+}
+
+function requestAddressParts(value) {
+  const text = clean(value);
+  if (!text) return {};
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed && typeof parsed === "object") {
+      const fromQuery = addressParts(parsed.mapQuery);
+      const fromAddress = addressParts(parsed.address);
+      return {
+        city: fromQuery.city || fromAddress.city || clean(parsed.city),
+        state: fromQuery.state || fromAddress.state || clean(parsed.state),
+        zip: fromQuery.zip || fromAddress.zip || clean(parsed.zip || parsed.postalCode)
+      };
+    }
+  } catch {}
+  return addressParts(text);
+}
+
+function requestContactParts(value) {
+  const text = clean(value);
+  if (!text) return {};
+  let parsed = null;
+  try { parsed = JSON.parse(text); } catch {}
+  const parsedClient = parsed && typeof parsed === "object" && parsed.client && typeof parsed.client === "object" ? parsed.client : {};
+  const emailMatches = [...text.matchAll(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi)]
+    .map((match) => match[0].toLowerCase())
+    .filter((email, index, values) => values.indexOf(email) === index)
+    .filter((email) => !/annaellison|floorplandrawings|noreply|no-reply/i.test(email));
+  const phoneMatches = [...text.matchAll(/(?:\+?1[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]\d{4}\b/g)]
+    .map((match) => match[0].replace(/\s+/g, " ").trim())
+    .filter((phone, index, values) => values.indexOf(phone) === index)
+    .filter((phone) => phone.replace(/\D/g, "") !== "4436213024");
+  const explicitName = text.match(/(?:^|\n)\s*(?:client|contact|name)\s*:\s*([^\n|]+)/i);
+  return {
+    name: clean(parsedClient.name || parsedClient.fullName || explicitName && explicitName[1]),
+    email: clean(parsedClient.email) || emailMatches[0] || "",
+    phone: clean(parsedClient.phone) || phoneMatches[0] || "",
+    emails: emailMatches,
+    phones: phoneMatches
+  };
+}
+
+function detailValue(value) {
+  if (value === undefined || value === null || value === "") return "";
+  if (typeof value === "object") {
+    if (value.name) return String(value.name);
+    if (Array.isArray(value)) return value.map((item) => detailValue(item)).filter(Boolean).join(", ");
+    return JSON.stringify(value);
+  }
+  return String(value);
+}
+
 function mapJob(record, options = {}) {
   const fields = record && record.fields ? record.fields : {};
   const baseId = clean(options.baseId);
@@ -31,16 +98,27 @@ function mapJob(record, options = {}) {
   const proposalReviewBaseUrl = clean(options.proposalReviewBaseUrl);
   const approvalToken = clean(first(fields, ["Quote Approval Token", "Approval Token"]));
   const verifiedSqFt = Number(first(fields, ["Verified Sq Ft", "Verified Square Feet"]));
+  const propertyAddress = first(fields, ["Full Address", "Property Address", "Address"]);
+  const originalRequest = first(fields, ["Original Request", "Client Message", "Client Request"]);
+  const derivedAddress = addressParts(propertyAddress);
+  const requestParts = requestAddressParts(originalRequest);
+  const requestContact = requestContactParts(originalRequest);
+  const detailFields = Object.fromEntries(Object.entries(fields)
+    .filter(([key, value]) => value !== "" && value !== null && value !== undefined && !/(token|secret|password)/i.test(key))
+    .map(([key, value]) => [key, detailValue(value)]));
 
   return {
     recordId: clean(record && record.id),
-    propertyAddress: first(fields, ["Full Address", "Property Address", "Address"]),
-    city: first(fields, ["City", "Town", "Municipality"]),
-    state: first(fields, ["State", "State/Province"]),
-    zip: first(fields, ["Zip", "Zip Code", "Postal Code"]),
-    clientName: first(fields, ["Client Name", "Name"]),
-    clientEmail: first(fields, ["Client Email", "Email"]),
-    clientPhone: first(fields, ["Client Phone", "Phone"]),
+    propertyAddress,
+    city: first(fields, ["City", "Town", "Municipality"]) || derivedAddress.city || requestParts.city,
+    state: first(fields, ["State", "State/Province"]) || derivedAddress.state || requestParts.state,
+    zip: first(fields, ["Zip", "Zip Code", "Postal Code"]) || derivedAddress.zip || requestParts.zip,
+    clientName: first(fields, ["Client Name", "Name"]) || requestContact.name,
+    clientEmail: first(fields, ["Client Email", "Email"]) || requestContact.email,
+    clientPhone: first(fields, ["Client Phone", "Phone"]) || requestContact.phone,
+    contactEmails: requestContact.emails,
+    contactPhones: requestContact.phones,
+    detailFields,
     agentName: first(fields, ["Agent Name", "Realtor Name", "Contact Name"]),
     agentEmail: first(fields, ["Agent Email", "Realtor Email", "Agent Email Address"]),
     agentPhone: first(fields, ["Agent Phone", "Realtor Phone"]),
@@ -50,7 +128,7 @@ function mapJob(record, options = {}) {
     normalizedPropertyKey: first(fields, ["Normalized Property Key"]),
     sourceChannels: first(fields, ["Source Channels"]),
     clientNotes: first(fields, ["Client Notes"]),
-    originalRequest: first(fields, ["Original Request", "Client Message", "Client Request"]),
+    originalRequest,
     service: first(fields, ["Drawing Style", "Service Requested", "Service"]),
     scope: first(fields, ["Scope", "Unit / Suite / Scope Detail"]),
     workflow: first(fields, ["Website Workflow", "Workflow", "Request Type"]) || "Quick Quote",
@@ -78,6 +156,7 @@ function mapJob(record, options = {}) {
     quoteNotes: first(fields, ["Quote Calculation Notes", "Quote Notes"]),
     followUpDate: first(fields, ["Follow-Up Date", "Follow Up Date"]),
     quoteSentDate: first(fields, ["Quote Sent Date"]),
+    quoteGiven: first(fields, ["Quote Sent Date", "Quote Amount", "Final Quote Preview", "Suggested Quote"]),
     appointmentDateTime: first(fields, ["Appointment Date/Time", "Appointment Start", "Appointment Date"]),
     appointmentStart: first(fields, ["Appointment Start", "Appointment Date/Time"]),
     nextAvailable: first(fields, ["Next Available Appointment", "Next Available", "Proposed Appointment"]),
@@ -85,6 +164,13 @@ function mapJob(record, options = {}) {
     accessInfo: first(fields, ["Access Info", "Access Details"]),
     clientResponse: first(fields, ["Client Response"]),
     annaEmailStatus: first(fields, ["Anna Email Status"]),
+    confirmationSentAt: first(fields, ["Client Confirmation Sent At", "Confirmation Sent At"]),
+    reminderSentAt: first(fields, ["Client Reminder Sent At", "Reminder Sent At"]),
+    calendarEventId: first(fields, ["Calendar Event ID", "Calendar Event UID"]),
+    calendarEventStart: first(fields, ["Calendar Event Start"]),
+    paymentStatus: first(fields, ["Payment Status"]),
+    invoiceStatus: first(fields, ["Invoice Status"]),
+    finalFiles: first(fields, ["Final Files", "Files / Final Deliverables"]),
     propertyCheckStatus: first(fields, ["Property Check Status"]),
     propertyResearchComplete: first(fields, ["Property Research Complete"]),
     tourRequested: yesNo(first(fields, ["3D Tour Requested", "3D Tour"])),
@@ -499,6 +585,7 @@ async function updateJob(recordId, fields, options = {}) {
 }
 
 module.exports = {
+  addressParts,
   appointmentProposalLogFields,
   clientQuoteLogFields,
   communicationKey,
@@ -527,5 +614,6 @@ module.exports = {
   inboundCommunicationLogFields,
   quoteReadyLogFields,
   updateCommunicationLog,
+  requestAddressParts,
   updateJob
 };

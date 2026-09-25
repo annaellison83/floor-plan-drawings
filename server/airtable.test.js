@@ -1,6 +1,32 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { clientQuoteLogFields, communicationKey, inboundCommunicationLogFields, mapJob, quoteReadyLogFields } = require("./airtable");
+const { addressParts, clientQuoteLogFields, communicationKey, inboundCommunicationLogFields, mapJob, quoteReadyLogFields, requestAddressParts } = require("./airtable");
+
+test("derives city, state, and zip from a full address", () => {
+  assert.deepEqual(addressParts("941 FORTUNE WAY LOS ANGELES CA 90042"), { city: "LOS ANGELES", state: "CA", zip: "90042" });
+});
+
+test("uses the intake map query when Airtable has only a street address", () => {
+  const job = mapJob({ fields: {
+    "Property Address": "1200 Elm Ave, Unit H",
+    "Original Request": JSON.stringify({ address: "1200 Elm Ave, Unit H", mapQuery: "1200 Elm Ave, San Gabriel, CA 91775, USA" })
+  }});
+  assert.equal(job.city, "San Gabriel");
+  assert.equal(job.state, "CA");
+  assert.equal(job.zip, "91775");
+  assert.deepEqual(requestAddressParts(job.originalRequest), { city: "San Gabriel", state: "CA", zip: "91775" });
+});
+
+test("uses contact details from the original request when Airtable fields are blank", () => {
+  const job = mapJob({ fields: {
+    "Property Address": "123 Main St",
+    "Original Request": "Subject: Floor plan request\n\nClient: Alex Rivera\nEmail: alex@example.com\nPhone: 323-555-0142\n\nAnna Ellison <annaellisonmail@gmail.com>"
+  }});
+  assert.equal(job.clientName, "Alex Rivera");
+  assert.equal(job.clientEmail, "alex@example.com");
+  assert.equal(job.clientPhone, "323-555-0142");
+  assert.deepEqual(job.detailFields, { "Property Address": "123 Main St", "Original Request": job.originalRequest });
+});
 
 test("maps a Jobs record without exposing credentials", () => {
   const job = mapJob({
