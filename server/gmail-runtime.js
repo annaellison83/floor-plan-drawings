@@ -135,6 +135,8 @@ function extractPropertyAddress(subject, text) {
 function extractClientName(subject, text) {
   const parts = clean(subject).replace(/^re:\s*/i, "").split("|").map(clean);
   if (parts.length >= 3 && parts[2] && !/requested|needed/i.test(parts[2])) return parts[2];
+  const explicit = clean(text).match(/(?:^|\n)\s*(?:client|customer|contact)\s*:\s*([^\n·|]+)/i);
+  if (explicit && clean(explicit[1]) && !looksLikeAddress(explicit[1])) return clean(explicit[1]);
   const listingMatch = clean(text).match(/\b(?:listing|project|property)\s*(?:for|by|with)?\s*:\s*([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){1,3})\b/);
   return listingMatch ? listingMatch[1] : "";
 }

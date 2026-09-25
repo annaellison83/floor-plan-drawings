@@ -26,6 +26,10 @@ test("structured intake extraction handles floor plan and site map subjects", ()
   assert.equal(extractPropertyAddress("Floor plan needed - 1624 Hillcrest Ave in Glendale", ""), "1624 Hillcrest Ave");
 });
 
+test("client extraction reads the explicit client line in a Gmail request", () => {
+  assert.equal(extractClientName("Floor plan request", "1917 Eden Ave, Pasadena, CA 91103\nClient: Deborah Wolsh · deborah.wolsh@compass.com · 310-433-0385"), "Deborah Wolsh");
+});
+
 test("structured intake extraction removes inline map links from an address", () => {
   assert.equal(extractPropertyAddress("", "150 El Camino Drive, Suite 300, Beverly Hills, CA 90212<https://www.google.com/maps/search/150+El+Camino>"), "150 El Camino Drive, Suite 300, Beverly Hills, CA 90212");
 });

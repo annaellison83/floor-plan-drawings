@@ -39,6 +39,17 @@ function contactName(contact) {
   return clean(contact && contact.name);
 }
 
+function isAddressLikeClient(value, address = "") {
+  const current = clean(value);
+  const property = clean(address);
+  if (!current || !property) return false;
+  const normalize = (input) => clean(input).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const clientKey = normalize(current);
+  const addressKey = normalize(property);
+  if (clientKey === addressKey) return true;
+  return clientKey.startsWith(addressKey) && /\b(?:ca|california)\b|\b\d{5}(?:-\d{4})?\b/i.test(current);
+}
+
 function existingSourceChannels(record) {
   return clean(record && record.fields && record.fields["Source Channels"])
     .split(",").map(clean).filter(Boolean);
@@ -103,10 +114,13 @@ function gmailAirtableFields(message = {}, project = {}, existing = null) {
     "Normalized Property Key": addressKey,
     "Source Channels": mergedSourceChannels(existing, "gmail")
   }, address);
+  const parsedClientName = clean(message.clientName);
   if (client) {
-    fields["Client Name"] = contactName(client) || clean(project.clientName);
+    fields["Client Name"] = contactName(client) || parsedClientName || clean(project.clientName);
     fields["Client Email"] = contactEmail(client);
-  } else if (clean(project.clientName)) {
+  } else if (parsedClientName && !isAddressLikeClient(parsedClientName, address)) {
+    fields["Client Name"] = parsedClientName;
+  } else if (clean(project.clientName) && !isAddressLikeClient(project.clientName, address)) {
     fields["Client Name"] = clean(project.clientName);
   }
   if (agent) fields["Agent / Company"] = contactName(agent) || contactEmail(agent);
@@ -123,7 +137,7 @@ function patchMissingGmailFields(record, incoming) {
       patch[key] = key === "Source Channels" ? mergedSourceChannels(record, value) : value;
       continue;
     }
-    if (!clean(existing[key])) patch[key] = value;
+    if (!clean(existing[key]) || (key === "Client Name" && isAddressLikeClient(existing[key], existing["Property Address"]) && !isAddressLikeClient(value, existing["Property Address"]))) patch[key] = value;
   }
   return patch;
 }

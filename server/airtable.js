@@ -35,6 +35,8 @@ function mapJob(record, options = {}) {
   return {
     recordId: clean(record && record.id),
     propertyAddress: first(fields, ["Full Address", "Property Address", "Address"]),
+    city: first(fields, ["City", "Town", "Municipality"]),
+    state: first(fields, ["State", "State/Province"]),
     zip: first(fields, ["Zip", "Zip Code", "Postal Code"]),
     clientName: first(fields, ["Client Name", "Name"]),
     clientEmail: first(fields, ["Client Email", "Email"]),

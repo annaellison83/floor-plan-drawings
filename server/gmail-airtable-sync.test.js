@@ -51,6 +51,14 @@ test("fills only missing business fields and always refreshes source identifiers
   assert.equal(patch["Client Email"], "client@example.com");
 });
 
+test("uses the parsed client name instead of an address-like fallback and repairs it", () => {
+  const address = "854 South Rimpau Boulevard, Los Angeles, CA 90019";
+  const record = { id: "rec1", fields: { "Property Address": address, "Client Name": address } };
+  const incoming = gmailAirtableFields({ id: "msg1", threadId: "thread-1", propertyAddress: address, clientName: "Deborah Wolsh", subject: "Floor plan", text: "Client: Deborah Wolsh" }, { propertyAddress: address, clientName: address }, record);
+  assert.equal(incoming["Client Name"], "Deborah Wolsh");
+  assert.equal(patchMissingGmailFields(record, incoming)["Client Name"], "Deborah Wolsh");
+});
+
 test("recognizes generated Gmail property fallbacks as replaceable asset placeholders", () => {
   const address = "1917 Eden Ave, Pasadena, CA 91103";
   const fields = gmailAirtableFields({ propertyAddress: address, threadId: "thread-assets", id: "message-assets", subject: "Floor plans", text: "Please quote this address" });
