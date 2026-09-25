@@ -77,7 +77,7 @@ function sessionFromRequest(req, env = process.env, now = Date.now()) {
 function credentialsMatch(username, password, env = process.env) {
   const configured = configuredCredentials(env);
   return Boolean(configured.username && configured.password
-    && timingSafeEqual(clean(username), configured.username)
+    && timingSafeEqual(clean(username).toLowerCase(), configured.username.toLowerCase())
     && timingSafeEqual(clean(password), configured.password));
 }
 

@@ -19,6 +19,7 @@ const env = {
 
 test("portal credentials compare without exposing the password", () => {
   assert.equal(credentialsMatch("anna", env.PORTAL_PASSWORD, env), true);
+  assert.equal(credentialsMatch("Anna", env.PORTAL_PASSWORD, env), true);
   assert.equal(credentialsMatch("anna", "wrong", env), false);
   assert.equal(credentialsMatch("eric", env.PORTAL_PASSWORD, env), false);
 });
