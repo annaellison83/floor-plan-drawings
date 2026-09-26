@@ -1,4 +1,5 @@
 const AIRTABLE_API = "https://api.airtable.com/v0";
+const { communicationLogFields } = require("./communications");
 
 function clean(value) {
   return value === undefined || value === null ? "" : String(value).trim();
@@ -284,6 +285,7 @@ function config(env = process.env) {
     jobsTable: clean(env.AIRTABLE_JOBS_TABLE) || "Jobs",
     jobsTableId: clean(env.AIRTABLE_JOBS_TABLE_ID),
     communicationLogTable: clean(env.AIRTABLE_COMMUNICATION_LOG_TABLE) || "Communication Log",
+    communicationLogExtendedFields: clean(env.AIRTABLE_COMMUNICATION_EXTENDED_FIELDS).toLowerCase() === "true",
     // Prevent a Render cutover from reviving indefinitely stale follow-ups.
     // Set to 0 to preserve the legacy unbounded Airtable rule.
     followUpMaxAgeDays: followUpMaxAge !== "" && Number.isFinite(Number(followUpMaxAge))
@@ -617,6 +619,30 @@ async function createInboundCommunicationLog(input, options = {}) {
   return { ...(await airtableJson(url, { token: settings.token, method: "POST", body: { records: [{ fields }], typecast: false } })), duplicate: false };
 }
 
+// Channel-neutral Communication Log writer. The legacy helpers above remain
+// unchanged for existing workflows. Extended fields are opt-in until the
+// Airtable schema migration has been applied; the default payload uses only
+// fields already present in the current base.
+async function createCommunicationLog(input, options = {}) {
+  const settings = { ...config(), ...options };
+  if (!settings.token || !settings.baseId) throw new Error("Airtable is not configured");
+  const fields = communicationLogFields({
+    recordId: input.recordId,
+    communication: input.communication,
+    summary: input.summary,
+    extended: input.extended === undefined ? settings.communicationLogExtendedFields : Boolean(input.extended)
+  });
+  if (!fields.Communication || !fields["Job Record ID"]) throw new Error("A communication key and Job record ID are required");
+  const formula = `{Communication}='${clean(fields.Communication).replaceAll("'", "\\'")}'`;
+  const lookupUrl = new URL(`${AIRTABLE_API}/${encodeURIComponent(settings.baseId)}/${encodeURIComponent(settings.communicationLogTable)}`);
+  lookupUrl.searchParams.set("filterByFormula", formula);
+  lookupUrl.searchParams.set("maxRecords", "1");
+  const existing = await airtableJson(lookupUrl.href, { token: settings.token });
+  if (existing.records && existing.records.length) return { records: existing.records, duplicate: true };
+  const url = `${AIRTABLE_API}/${encodeURIComponent(settings.baseId)}/${encodeURIComponent(settings.communicationLogTable)}`;
+  return { ...(await airtableJson(url, { token: settings.token, method: "POST", body: { records: [{ fields }], typecast: false } })), duplicate: false };
+}
+
 async function createAppointmentProposalLog(input, options = {}) {
   const settings = { ...config(), ...options };
   if (!settings.token || !settings.baseId) throw new Error("Airtable is not configured");
@@ -679,6 +705,7 @@ module.exports = {
   createQuoteReadyLog,
   createNotificationLog,
   createInboundCommunicationLog,
+  createCommunicationLog,
   diagnoseClientData,
   findClientQuoteDeliveries,
   findAppointmentProposalDeliveries,

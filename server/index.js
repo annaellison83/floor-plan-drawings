@@ -15,8 +15,9 @@ const { calendarAirtableFields, calendarEventKey, directionlessStreetKey, extrac
 const { proposalPayload, signProposal, verifyProposal } = require("./appointment-proposals");
 const { hasFallbackSmtp, isSmtpConfigured, sendFailureAlert, sendMail, verifySmtp } = require("./mail");
 const { projectState, recipientsFor } = require("./project-state");
-const { createGmailClient, isGmailConfigured, isGmailDraftConfigured, isLikelyFloorPlanIntake, isWeTransferPaymentConfirmation, parseGmailMessage, processIntakeMessages } = require("./gmail-runtime");
+const { createGmailClient, isGmailConfigured, isGmailDraftConfigured, isGoogleVoiceNotification, isLikelyFloorPlanIntake, isWeTransferPaymentConfirmation, parseGmailMessage, processIntakeMessages } = require("./gmail-runtime");
 const { deliveryFieldsForMessage, findGmailAirtableMatch, findPaymentAirtableMatch, gmailAirtableFields, isGeneratedPropertyFallback, messageContactEmail, patchMissingGmailFields, paymentFieldsForMessage, resolveGmailSyncAddress, weTransferLinks } = require("./gmail-airtable-sync");
+const { heartbeatConfig, matchCommunicationToJobs, normalizeCommunication, normalizePhone, phoneCandidates, reviewMetadata } = require("./communications");
 const { enrichGmailProperty: enrichGmailPropertyWithAssets } = require("./gmail-property-enrichment");
 const { translateClientNotes } = require("./note-translation");
 const { assetFilename, prepareEmailAssets, readAsset } = require("./image-assets");
@@ -39,6 +40,7 @@ const { verifyClientDraft } = require("./email-drafts");
 const {
   createClientQuoteLog,
   createInboundCommunicationLog,
+  createCommunicationLog,
   createAppointmentProposalLog,
   createNotificationLog,
   createQuoteReadyLog,
@@ -109,6 +111,13 @@ function clean(value) {
   return value === undefined || value === null ? "" : String(value).trim();
 }
 
+// SMTP_USER is the authenticated/sending account. Keep the operator mailbox
+// independently configurable so Anna can use anna@floorplandrawings.com while
+// the business identity remains hello@floorplandrawings.com.
+function internalNotificationEmail() {
+  return clean(process.env.INTERNAL_NOTIFICATION_EMAIL || process.env.SMTP_USER);
+}
+
 function inlineAerialAttachments(job = {}) {
   const filePath = clean(job.emailAerialPath);
   const cid = clean(job.emailAerialCid);
@@ -138,7 +147,7 @@ function syncProjectState(job, patch = {}) {
     contacts: {
       client: job.clientEmail,
       agent: job.agentEmail,
-      internal: clean(process.env.SMTP_USER),
+      internal: internalNotificationEmail(),
       policy: job.recipientPolicy || "client",
       policyExplicit: Boolean(job.recipientPolicy)
     },
@@ -239,8 +248,102 @@ function integrationStatus() {
     gmailIntakeNotificationEnabled: gmailIntakeNotificationEnabled(),
     noteTranslationEnabled: noteTranslationEnabled(),
     calendarAirtableSyncEnabled: calendarAirtableSyncEnabled(),
-    calendarGmailLabelSyncEnabled: calendarGmailLabelSyncEnabled()
+    calendarGmailLabelSyncEnabled: calendarGmailLabelSyncEnabled(),
+    communicationLogExtendedFields: Boolean(require("./airtable").config().communicationLogExtendedFields),
+    businessPhoneNumber: normalizePhone(process.env.BUSINESS_PHONE_NUMBER) || null,
+    phoneCommunicationIngestEnabled: phoneCommunicationIngestEnabled(),
+    phoneBridgeMonitorEnabled: heartbeatConfig().monitorEnabled
   };
+}
+
+function phoneCommunicationIngestEnabled() {
+  return clean(process.env.ENABLE_PHONE_COMMUNICATION_INGEST).toLowerCase() === "true";
+}
+
+function communicationIngestAuthorized(req) {
+  const expected = clean(process.env.COMMUNICATION_INGEST_TOKEN || process.env.PHONE_BRIDGE_TOKEN);
+  return Boolean(expected && clean(req.headers["x-communication-ingest-token"] || req.headers["x-phone-bridge-token"]) === expected);
+}
+
+function googleVoiceCommunication(message) {
+  const subjectPhone = phoneCandidates(message.subject)[0] || "";
+  const body = clean(message.text);
+  return normalizeCommunication({
+    channel: "sms",
+    provider: "google-voice-email",
+    externalMessageId: message.id || message.messageId,
+    conversationId: message.threadId,
+    senderPhone: subjectPhone || phoneCandidates(body)[0],
+    subject: message.subject,
+    body,
+    propertyAddress: message.propertyAddress,
+    receivedAt: message.date || message.internalDate,
+    attachmentIds: message.attachmentNames
+  });
+}
+
+async function processInboundCommunication(input, { airtableRecords = null, shadow = false } = {}) {
+  const communication = normalizeCommunication(input);
+  const records = airtableRecords || (process.env.AIRTABLE_TOKEN && process.env.AIRTABLE_BASE_ID ? await listJobs({ maxRecords: 500 }) : []);
+  const match = matchCommunicationToJobs(communication, records);
+  const message = { ...communication, matchConfidence: match.confidence, matchReason: match.reason };
+  if (!match.record) {
+    const review = projectState.queueCommunicationReview(reviewMetadata(message, match));
+    return { ok: true, action: "review", duplicate: review.duplicate, communication: communication.communication, match: { confidence: match.confidence, reason: match.reason, candidateRecordIds: (match.candidates || []).map((record) => record.id) } };
+  }
+  const recordId = clean(match.record.id);
+  if (shadow || !gmailAirtableSyncEnabled()) {
+    projectState.event({ projectId: recordId, type: "communication.matched-shadow", data: { communication: communication.communication, channel: communication.channel, reason: match.reason } });
+    return { ok: true, action: "matched-shadow", recordId, communication: communication.communication, match: { confidence: match.confidence, reason: match.reason } };
+  }
+  const log = await createCommunicationLog({ recordId, communication: message, summary: `Inbound ${message.channelLabel} message matched by ${match.reason}.` });
+  projectState.event({ projectId: recordId, type: "communication.logged", data: { communication: communication.communication, channel: communication.channel, confidence: match.confidence, reason: match.reason, duplicate: Boolean(log.duplicate) } });
+  return { ok: true, action: log.duplicate ? "duplicate" : "logged", duplicate: Boolean(log.duplicate), recordId, communication: communication.communication, match: { confidence: match.confidence, reason: match.reason } };
+}
+
+async function ingestGoogleVoiceMessage(message, airtableRecords = []) {
+  const communication = googleVoiceCommunication(message);
+  return processInboundCommunication(communication, { airtableRecords });
+}
+
+async function monitorPhoneBridgeHeartbeats() {
+  const settings = heartbeatConfig();
+  if (!settings.monitorEnabled) return { enabled: false, stale: [] };
+  const now = Date.now();
+  const stale = [];
+  for (const heartbeat of projectState.listHeartbeats()) {
+    const seen = Date.parse(heartbeat.lastSeenAt);
+    if (!Number.isFinite(seen)) continue;
+    const ageMs = now - seen;
+    if (ageMs < settings.maxAgeMs) continue;
+    const item = { bridgeId: heartbeat.bridgeId, channel: heartbeat.channel, lastSeenAt: heartbeat.lastSeenAt, ageMinutes: Math.round(ageMs / 60000) };
+    stale.push(item);
+    const subject = `PHONE BRIDGE OFFLINE | ${heartbeat.bridgeId}`;
+    const text = [
+      `The ${heartbeat.channel || "phone"} bridge ${heartbeat.bridgeId} has not sent a heartbeat since ${heartbeat.lastSeenAt}.`,
+      `Last successful receive: ${heartbeat.lastSuccessfulReceiveAt || "unknown"}.`,
+      `Last successful send: ${heartbeat.lastSuccessfulSendAt || "unknown"}.`,
+      `Queued inbound at last heartbeat: ${heartbeat.queuedInbound || 0}.`,
+      `Bridge version: ${heartbeat.version || "unknown"}.`
+    ].join("\n");
+    if (settings.alertEmail && !heartbeat.alertSentAt) {
+      try {
+        await sendMail({ to: [settings.alertEmail], subject, text, html: `<p>${escapeHtml(text).replace(/\n/g, "<br>")}</p>` });
+        projectState.updateHeartbeatAlert(heartbeat.bridgeId, { alertState: "alerted", alertSentAt: new Date().toISOString() });
+      } catch (error) {
+        console.error(`Phone bridge alert failed for ${heartbeat.bridgeId}: ${error.message}`);
+      }
+    }
+    if (settings.escalationEmail && ageMs >= settings.escalationAgeMs && !heartbeat.escalationSentAt) {
+      try {
+        await sendMail({ to: [settings.escalationEmail], subject: `ESCALATION: ${subject}`, text, html: `<p>${escapeHtml(text).replace(/\n/g, "<br>")}</p>` });
+        projectState.updateHeartbeatAlert(heartbeat.bridgeId, { alertState: "escalated", escalationSentAt: new Date().toISOString() });
+      } catch (error) {
+        console.error(`Phone bridge escalation failed for ${heartbeat.bridgeId}: ${error.message}`);
+      }
+    }
+  }
+  return { enabled: true, stale };
 }
 
 function quoteReadyEnabled() {
@@ -413,7 +516,7 @@ async function applyGmailIntakeLabel(client, match) {
   return { ok: true, threadId, messageCount: Math.min(ids.length, 100), labelId };
 }
 
-const DEFAULT_GMAIL_AUTO_LABEL_QUERY = 'newer_than:3d -in:spam -in:trash -label:"[FPD] Intake" {floorplan "floor plan" "site plan" "sq ft" "square feet" matterport "new request" "new job" "quick quote" measure listing}';
+const DEFAULT_GMAIL_AUTO_LABEL_QUERY = 'newer_than:3d -in:spam -in:trash -label:"[FPD] Intake" {floorplan "floor plan" "site plan" "sq ft" "square feet" matterport "new request" "new job" "quick quote" "quote for this property" "could you give us a quote" measure listing}';
 
 async function autoLabelGmailIntake(client) {
   const config = client && client.config;
@@ -733,7 +836,7 @@ async function pollCalendarAirtableSync() {
 
 async function deliverGmailIntakeNotification(project, message) {
   if (!project.propertyAddress) return { ok: false, skipped: true, reason: "Property address is missing" };
-  const internalTo = [clean(process.env.SMTP_USER)];
+  const internalTo = [internalNotificationEmail()];
   if (!internalTo[0]) throw new Error("SMTP_USER is not configured");
   const threadUrl = message.threadId ? `https://mail.google.com/mail/u/0/#all/${encodeURIComponent(message.threadId)}` : "";
   const job = {
@@ -779,7 +882,7 @@ async function deliverGmailIntakeNotification(project, message) {
 
 async function deliverGmailRoleClarification(project, message, recordId) {
   if (!gmailRoleClarificationEnabled() || !recordId) return { ok: false, skipped: true, reason: "role clarification is disabled or Airtable record is unavailable" };
-  const internalTo = [clean(process.env.SMTP_USER)];
+  const internalTo = [internalNotificationEmail()];
   if (!internalTo[0]) throw new Error("SMTP_USER is not configured");
   const contacts = [
     ...((message.contacts && message.contacts.unknown) || []),
@@ -837,7 +940,7 @@ async function ingestGmailMessage(message) {
     contacts: {
       client: clientContacts.map((contact) => contact.email),
       agent: agentContacts.map((contact) => contact.email),
-      internal: clean(process.env.SMTP_USER),
+      internal: internalNotificationEmail(),
       policy,
       policyExplicit: Boolean(policy)
     },
@@ -873,6 +976,18 @@ async function pollGmailIntake() {
     client,
     store,
     onMessage: async (message) => {
+      // Google Voice notifications are an SMS transport delivered through
+      // Gmail. They must never create a Job from a text body alone, but they
+      // can safely attach to one existing Job or enter the review queue.
+      if (isGoogleVoiceNotification(message)) {
+        try {
+          const phoneResult = await ingestGoogleVoiceMessage(message, airtableRecords);
+          airtableSync.push({ messageId: message.id, threadId: message.threadId, phone: true, ...phoneResult });
+        } catch (error) {
+          airtableSync.push({ messageId: message.id, threadId: message.threadId, phone: true, action: "error", error: error.message });
+        }
+        return null;
+      }
       // The intake label can contain outgoing quote drafts or other mail that
       // was labeled manually. Keep the same intake heuristic at the ingestion
       // boundary so those messages never become jobs even if they are already
@@ -1273,7 +1388,7 @@ async function sendAvailabilityProposal(recordId, input = {}) {
   const logRecordId = reservation.records && reservation.records[0] && reservation.records[0].id;
   if (!logRecordId) throw new Error("Airtable did not return the appointment proposal log ID");
   try {
-    const delivery = await sendMail({ to: target.to, replyTo: clean(process.env.SMTP_USER), subject: email.subject, html: email.html, text: email.text });
+    const delivery = await sendMail({ to: target.to, replyTo: internalNotificationEmail(), subject: email.subject, html: email.html, text: email.text });
     projectState.updateDelivery(stateReservation.delivery.idempotencyKey, { status: "sent", attempts: delivery.attempts, provider: delivery.provider, messageId: delivery.messageId });
     await updateCommunicationLog(logRecordId, { "Delivery Status": "Sent", Summary: `Appointment options sent by Render for ${job.propertyAddress}${delivery.messageId ? `; message ${delivery.messageId}` : ""}` });
     return { ok: true, status: 200, recordId, logRecordId, proposalUrl, options: proposalSlots };
@@ -1368,7 +1483,7 @@ async function deliverQuoteReady(recordId) {
     }
     const job = await getJob(recordId);
     const project = syncProjectState(job);
-    const internalTo = [clean(process.env.SMTP_USER)];
+    const internalTo = [internalNotificationEmail()];
     if (!internalTo[0]) throw new Error("SMTP_USER is not configured");
     const preparedJob = await prepareEmailAssets(job);
     const email = quoteReadyEmail(preparedJob);
@@ -1465,7 +1580,7 @@ async function deliverClientQuote(recordId) {
     if (stateReservation.duplicate) return { ok: false, status: 409, error: "Duplicate delivery blocked", recordId, deliveryId: stateReservation.delivery.id };
     const delivery = await sendMail({
       to: target.to,
-      replyTo: clean(process.env.SMTP_USER),
+      replyTo: internalNotificationEmail(),
       subject: email.subject,
       html: email.html,
       text: email.text
@@ -1593,7 +1708,7 @@ async function deliverProjectAppointmentEmail(projectId, appointment, mode = "co
       metadata: appointmentMetadata,
       note: `${workflow} queued by Render`
     }, "render");
-    const delivery = await sendMail({ to, replyTo: clean(process.env.SMTP_USER), subject: email.subject, html: email.html, text: email.text });
+    const delivery = await sendMail({ to, replyTo: internalNotificationEmail(), subject: email.subject, html: email.html, text: email.text });
     projectState.updateDelivery(reservation.delivery.idempotencyKey, { status: "sent", attempts: delivery.attempts, provider: delivery.provider, messageId: delivery.messageId });
     return { ok: true, status: 200, projectId, workflow, recipients: to, delivery: "sent", messageId: delivery.messageId };
   } catch (error) {
@@ -1638,7 +1753,7 @@ async function deliverInternalNotification(recordId, eventType, buildEmail, stat
     if (priorDeliveries.length) return { ok: false, status: 409, error: "Duplicate delivery blocked" };
     const job = await getJob(recordId);
     const project = syncProjectState(job);
-    const internalTo = [clean(process.env.SMTP_USER)];
+    const internalTo = [internalNotificationEmail()];
     if (!internalTo[0]) throw new Error("SMTP_USER is not configured");
     const preparedJob = await prepareEmailAssets(job);
     const email = buildEmail(preparedJob);
@@ -1771,10 +1886,10 @@ async function pollFollowUps() {
       sourceId: "daily-follow-up",
       status: "active",
       stage: "delivery",
-      contacts: { internal: clean(process.env.SMTP_USER), policy: "internal" },
+      contacts: { internal: internalNotificationEmail(), policy: "internal" },
       metadata: { count: jobs.length, date: today }
     });
-    const followUpTo = [clean(process.env.SMTP_USER)];
+    const followUpTo = [internalNotificationEmail()];
     if (!followUpTo[0]) throw new Error("SMTP_USER is not configured");
     const stateReservation = reserveRenderDelivery({ project: followUpProject, workflow: "FOLLOW-UP", recipientType: "internal", to: followUpTo, subject: email.subject, version: today });
     if (stateReservation.duplicate) {
@@ -2394,6 +2509,97 @@ async function route(req, res) {
     return json(res, 200, { ok: true, readOnly: true, deliveries: projectState.listDeliveries({ projectId: url.searchParams.get("projectId"), status: url.searchParams.get("status"), limit: url.searchParams.get("limit") }) });
   }
 
+  if (req.method === "GET" && url.pathname === "/api/ops/communications/review") {
+    if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+    return json(res, 200, {
+      ok: true,
+      readOnly: true,
+      reviews: projectState.listCommunicationReviews({ status: url.searchParams.get("status") || "", limit: url.searchParams.get("limit") })
+    });
+  }
+
+  const communicationReviewResolveMatch = url.pathname.match(/^\/api\/ops\/communications\/review\/([^/]+)\/resolve$/);
+  if (req.method === "POST" && communicationReviewResolveMatch) {
+    if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+    try {
+      const communication = decodeURIComponent(communicationReviewResolveMatch[1]);
+      const review = projectState.getCommunicationReview(communication);
+      if (!review) return json(res, 404, { error: "Communication review not found" });
+      const body = await readJsonBody(req);
+      const recordId = clean(body.recordId);
+      if (!/^rec[A-Za-z0-9]+$/.test(recordId)) return json(res, 400, { error: "A valid Airtable Job record ID is required" });
+      await getJob(recordId);
+      const log = await createCommunicationLog({
+        recordId,
+        communication: {
+          communication: review.communication,
+          channel: review.channel,
+          provider: review.provider,
+          externalMessageId: review.externalMessageId,
+          conversationId: review.conversationId,
+          sender: review.sender,
+          subject: review.subject,
+          body: review.bodySummary,
+          receivedAt: review.receivedAt,
+          matchConfidence: "manual",
+          matchReason: "anna-review"
+        },
+        summary: `Inbound ${review.channel || "communication"} message manually attached by Anna.`
+      });
+      const resolved = projectState.resolveCommunicationReview(communication, { recordId, actor: clean(body.actor) || "anna" });
+      return json(res, 200, { ok: true, duplicate: Boolean(log.duplicate), log, review: resolved });
+    } catch (error) {
+      return json(res, 400, { error: "Communication review could not be resolved", detail: error.message });
+    }
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/ops/phone/heartbeats") {
+    if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+    const settings = heartbeatConfig();
+    const now = Date.now();
+    const heartbeats = projectState.listHeartbeats().map((heartbeat) => ({
+      ...heartbeat,
+      ageMinutes: Number.isFinite(Date.parse(heartbeat.lastSeenAt)) ? Math.max(0, Math.round((now - Date.parse(heartbeat.lastSeenAt)) / 60000)) : null,
+      staleAfterMinutes: Math.round(settings.maxAgeMs / 60000)
+    }));
+    return json(res, 200, { ok: true, readOnly: true, monitor: settings, heartbeats });
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/communications/inbound") {
+    if (!communicationIngestAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+    if (!phoneCommunicationIngestEnabled()) return json(res, 503, { error: "Phone communication ingest is disabled" });
+    try {
+      const body = await readJsonBody(req);
+      if (!["sms", "mms", "imessage", "email"].includes(clean(body.channel).toLowerCase())) {
+        return json(res, 400, { error: "channel must be sms, mms, imessage, or email" });
+      }
+      return json(res, 200, await processInboundCommunication(body));
+    } catch (error) {
+      return json(res, 502, { ok: false, error: "Communication ingest failed", detail: error.message });
+    }
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/phone/heartbeat") {
+    if (!communicationIngestAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+    try {
+      const body = await readJsonBody(req);
+      if (!clean(body.bridgeId) || !clean(body.channel)) return json(res, 400, { error: "bridgeId and channel are required" });
+      const heartbeat = projectState.recordHeartbeat({
+        bridgeId: body.bridgeId,
+        channel: body.channel,
+        provider: body.provider,
+        version: body.version,
+        queuedInbound: body.queuedInbound,
+        lastSuccessfulSendAt: body.lastSuccessfulSendAt,
+        lastSuccessfulReceiveAt: body.lastSuccessfulReceiveAt,
+        metadata: body.metadata
+      });
+      return json(res, 200, { ok: true, heartbeat: { bridgeId: heartbeat.bridgeId, channel: heartbeat.channel, lastSeenAt: heartbeat.lastSeenAt } });
+    } catch (error) {
+      return json(res, 400, { error: "Phone bridge heartbeat rejected", detail: error.message });
+    }
+  }
+
   if (req.method === "POST" && url.pathname === "/api/gmail/intake/poll") {
     if (!isAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
     try {
@@ -2945,6 +3151,10 @@ server.listen(PORT, "0.0.0.0", () => {
   if (gmailIntakePollEnabled()) {
     setTimeout(() => pollGmailIntake().catch((error) => console.error(`Gmail intake poll failed: ${error.message}`)), 12000).unref();
     setInterval(() => pollGmailIntake().catch((error) => console.error(`Gmail intake poll failed: ${error.message}`)), Number(process.env.GMAIL_INTAKE_POLL_MS) || 120000).unref();
+  }
+  if (heartbeatConfig().monitorEnabled) {
+    setTimeout(() => monitorPhoneBridgeHeartbeats().catch((error) => console.error(`Phone bridge monitor failed: ${error.message}`)), 30000).unref();
+    setInterval(() => monitorPhoneBridgeHeartbeats().catch((error) => console.error(`Phone bridge monitor failed: ${error.message}`)), Number(process.env.PHONE_BRIDGE_MONITOR_POLL_MS) || 60000).unref();
   }
   setTimeout(pollNoteTranslations, 14000).unref();
   setInterval(pollNoteTranslations, Number(process.env.NOTE_TRANSLATION_POLL_MS) || 60000).unref();

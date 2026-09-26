@@ -69,6 +69,22 @@ test("structured intake extraction removes inline map links from an address", ()
   assert.equal(extractPropertyAddress("", "150 El Camino Drive, Suite 300, Beverly Hills, CA 90212<https://www.google.com/maps/search/150+El+Camino>"), "150 El Camino Drive, Suite 300, Beverly Hills, CA 90212");
 });
 
+test("a new quote in an existing thread uses the body property instead of the old subject property", () => {
+  assert.equal(
+    extractPropertyAddress(
+      "Re: QUOTE READY | 3225 OAKSHIRE DR LOS ANGELES CA 90068",
+      "Hi Anna,\nCould you give us a quote for this property:\n519 North Alta Drive, Beverly Hills, California\nAnna Yao\nSunoom Realty\n845.706.7933"
+    ),
+    "519 North Alta Drive, Beverly Hills, California"
+  );
+  assert.equal(isLikelyFloorPlanIntake({
+    subject: "Re: QUOTE READY | 3225 OAKSHIRE DR LOS ANGELES CA 90068",
+    text: "Could you give us a quote for this property:\n519 North Alta Drive, Beverly Hills, California",
+    propertyAddress: "519 North Alta Drive, Beverly Hills, California",
+    contacts: { source: { role: "unknown", email: "anna.yao@sunoomrealty.com" } }
+  }), true);
+});
+
 test("address parsing ignores a signature-only brokerage address", () => {
   assert.equal(extractPropertyAddress("Floor plan request", "4111 Edgehill Drive\n\nThanks,\nBrokerage Team\n680 E Colorado Blvd, Suite 400, Pasadena, CA 91101"), "4111 Edgehill Drive");
   assert.equal(extractPropertyAddress("Floor plan request", "Please measure the home.\n\nThanks,\nBrokerage Team\n680 E Colorado Blvd, Suite 400, Pasadena, CA 91101"), "");

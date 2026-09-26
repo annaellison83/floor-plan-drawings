@@ -98,6 +98,8 @@ class ProjectStateStore {
     this.events = [];
     this.deliveries = new Map();
     this.processedMessages = new Map();
+    this.communicationReviews = new Map();
+    this.heartbeats = new Map();
     this._load();
   }
 
@@ -109,6 +111,8 @@ class ProjectStateStore {
       this.events = Array.isArray(parsed.events) ? parsed.events : [];
       for (const delivery of parsed.deliveries || []) this.deliveries.set(delivery.idempotencyKey, delivery);
       for (const message of parsed.processedMessages || []) this.processedMessages.set(message.key, message);
+      for (const review of parsed.communicationReviews || []) this.communicationReviews.set(review.communication, review);
+      for (const heartbeat of parsed.heartbeats || []) this.heartbeats.set(heartbeat.bridgeId, heartbeat);
     } catch (error) {
       if (error.code !== "ENOENT") console.warn(`Project state could not be loaded: ${error.message}`);
     }
@@ -123,7 +127,9 @@ class ProjectStateStore {
         projects: [...this.projects.values()],
         events: this.events.slice(-5000),
         deliveries: [...this.deliveries.values()].slice(-2000),
-        processedMessages: [...this.processedMessages.values()].slice(-5000)
+        processedMessages: [...this.processedMessages.values()].slice(-5000),
+        communicationReviews: [...this.communicationReviews.values()].slice(-1000),
+        heartbeats: [...this.heartbeats.values()].slice(-100)
       }, null, 2), { mode: 0o600 });
       fs.renameSync(temp, this.filePath);
     } catch (error) {
@@ -253,6 +259,105 @@ class ProjectStateStore {
     this.processedMessages.set(normalized, record);
     this._persist();
     return record;
+  }
+
+  queueCommunicationReview(input = {}) {
+    const communication = clean(input.communication);
+    if (!communication) throw new Error("communication is required");
+    const existing = this.communicationReviews.get(communication);
+    if (existing) return { duplicate: true, review: existing };
+    const review = {
+      communication,
+      channel: clean(input.channel),
+      provider: clean(input.provider),
+      externalMessageId: clean(input.externalMessageId),
+      conversationId: clean(input.conversationId),
+      sender: input.sender && typeof input.sender === "object" ? safeMetadata(input.sender) : {},
+      subject: clean(input.subject),
+      propertyAddress: clean(input.propertyAddress),
+      normalizedPropertyKey: clean(input.normalizedPropertyKey),
+      receivedAt: clean(input.receivedAt) || now(),
+      bodySummary: clean(input.bodySummary).slice(0, 1200),
+      matchConfidence: clean(input.matchConfidence) || "low",
+      matchReason: clean(input.matchReason) || "needs-review",
+      candidateRecordIds: Array.isArray(input.candidateRecordIds) ? input.candidateRecordIds.map(clean).filter(Boolean).slice(0, 20) : [],
+      status: "needs-review",
+      createdAt: now(),
+      updatedAt: now()
+    };
+    this.communicationReviews.set(communication, review);
+    this.event({ projectId: clean(input.projectId), type: "communication.review-required", data: { communication, channel: review.channel, reason: review.matchReason } });
+    this._persist();
+    return { duplicate: false, review };
+  }
+
+  listCommunicationReviews({ status = "", limit = 100 } = {}) {
+    return [...this.communicationReviews.values()]
+      .filter((review) => !status || review.status === status)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .slice(0, Math.max(1, Math.min(500, Number(limit) || 100)));
+  }
+
+  getCommunicationReview(communication) {
+    return this.communicationReviews.get(clean(communication)) || null;
+  }
+
+  resolveCommunicationReview(communication, { recordId, actor = "anna" } = {}) {
+    const review = this.communicationReviews.get(clean(communication));
+    if (!review) return null;
+    if (review.status === "resolved") return review;
+    review.status = "resolved";
+    review.recordId = clean(recordId);
+    review.resolvedBy = clean(actor) || "anna";
+    review.resolvedAt = now();
+    review.updatedAt = now();
+    this._persist();
+    return review;
+  }
+
+  recordHeartbeat(input = {}) {
+    const bridgeId = clean(input.bridgeId);
+    if (!bridgeId) throw new Error("bridgeId is required");
+    const previous = this.heartbeats.get(bridgeId);
+    const heartbeat = {
+      bridgeId,
+      channel: clean(input.channel),
+      provider: clean(input.provider),
+      version: clean(input.version),
+      lastSeenAt: now(),
+      queuedInbound: Math.max(0, Number(input.queuedInbound) || 0),
+      lastSuccessfulSendAt: clean(input.lastSuccessfulSendAt),
+      lastSuccessfulReceiveAt: clean(input.lastSuccessfulReceiveAt),
+      metadata: safeMetadata(input.metadata),
+      alertState: "healthy",
+      alertSentAt: "",
+      escalationSentAt: "",
+      updatedAt: now()
+    };
+    // A recovered bridge should be eligible for a fresh alert cycle, while the
+    // latest operational counters remain visible to the monitor.
+    if (previous && previous.alertState === "healthy") {
+      heartbeat.alertSentAt = previous.alertSentAt;
+      heartbeat.escalationSentAt = previous.escalationSentAt;
+    }
+    this.heartbeats.set(bridgeId, heartbeat);
+    this._persist();
+    return heartbeat;
+  }
+
+  listHeartbeats() {
+    return [...this.heartbeats.values()].sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt));
+  }
+
+  updateHeartbeatAlert(bridgeId, patch = {}) {
+    const heartbeat = this.heartbeats.get(clean(bridgeId));
+    if (!heartbeat) return null;
+    for (const field of ["alertState", "alertSentAt", "escalationSentAt"]) {
+      if (patch[field] !== undefined) heartbeat[field] = clean(patch[field]);
+    }
+    heartbeat.updatedAt = now();
+    this._persist();
+    return heartbeat;
   }
 }
 

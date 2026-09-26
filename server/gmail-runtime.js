@@ -169,6 +169,19 @@ function isGoogleVoiceNotification(message = {}) {
 function extractPropertyAddress(subject, text) {
   const headline = clean(subject).replace(/^re:\s*/i, "");
   const pipeParts = headline.split("|").map(clean);
+  const body = stripAutomatedFooter(text);
+  const rawLines = body.split(/\r?\n/);
+  // A reply can keep the address from an older job in its subject while
+  // introducing a new property in the body. Prefer the body's structured
+  // address when it clearly asks for a new quote or measurement.
+  const bodyRequest = /\b(?:could|can|would)\s+you(?:\s+please)?\s+(?:give|provide|send)\s+(?:us\s+)?(?:a\s+)?quote\b|\bplease\s+(?:give|provide|send|quote)\b|\b(?:we(?:'d| would)\s+like|request(?:ing)?)\s+(?:a\s+)?quote\b|\b(?:could|can|would)\s+you(?:\s+please)?\s+(?:get|do)\s+(?:a\s+)?(?:floor\s*plans?|measurement?s?)\b/i.test(body);
+  const signatureIndex = rawLines.findIndex((line) => /^(?:--\s*$|best(?: regards)?[,!]?|thanks[,!]?|thank you[,!]?|warm regards[,!]?|sincerely[,!]?|sent from my .+)$/i.test(clean(line)));
+  const requestLines = signatureIndex >= 0 ? rawLines.slice(0, signatureIndex) : rawLines;
+  const bodyLines = requestLines
+    .map((line) => clean(line).replace(/<https?:\/\/[^>]+>/gi, "").replace(/https?:\/\/\S+/gi, "").trim())
+    .filter(Boolean);
+  const bodyAddress = bodyLines.find(looksLikeAddress) || "";
+  if (bodyRequest && bodyAddress) return bodyAddress;
   if (pipeParts.length >= 3 && looksLikeAddress(pipeParts[1])) return pipeParts[1];
   const dashAddress = headline.match(/^(.+?)\s+-\s+(?:site map|floor plan|property)\s+requested\b/i);
   if (dashAddress && clean(dashAddress[1])) return clean(dashAddress[1]);
@@ -178,12 +191,9 @@ function extractPropertyAddress(subject, text) {
   // in Google's Mountain View address. That address is a footer, never the
   // property being discussed, so remove the footer before looking for a job
   // address.
-  const body = stripAutomatedFooter(text);
-  const rawLines = body.split(/\r?\n/);
   // Ignore the trailing signature block when the message has no structured
   // subject address. This prevents a brokerage office address from becoming a
   // new job while retaining addresses in the request body above the sign-off.
-  const signatureIndex = rawLines.findIndex((line) => /^(?:--\s*$|best(?: regards)?[,!]?|thanks[,!]?|thank you[,!]?|warm regards[,!]?|sincerely[,!]?|sent from my .+)$/i.test(clean(line)));
   const lines = (signatureIndex >= 0 ? rawLines.slice(0, signatureIndex) : rawLines)
     .map((line) => clean(line).replace(/<https?:\/\/[^>]+>/gi, "").replace(/https?:\/\/\S+/gi, "").trim())
     .filter(Boolean);
@@ -235,13 +245,15 @@ function parseGmailMessage(message, options = {}) {
 }
 
 const FPD_INTAKE_MARKERS = /\b(?:floor\s*plans?|floorplans?|floor\s*plan\s*(?:inquiry|needed)|site\s*plans?|matterport|3d\s*(?:tour|scan)|sq\.?\s*ft|square\s*feet|quick\s*quote|quote\s*(?:request|ready)|new\s+(?:request|job)|measure(?:ment)?s?|fpd\s+website)\b/i;
+const EXPLICIT_QUOTE_REQUEST = /\b(?:could|can|would)\s+you(?:\s+please)?\s+(?:give|provide|send)\s+(?:us\s+)?(?:a\s+)?quote\b|\bplease\s+(?:give|provide|send|quote)\b|\b(?:we(?:'d| would)\s+like|request(?:ing)?)\s+(?:a\s+)?quote\b/i;
 const FPD_NON_INTAKE_MARKERS = /\b(?:kaiser|medical|therapy|soul\s*tenders|stripe|payout|tax|sep\s+contribution|retirement|insurance)\b/i;
 
 function isLikelyFloorPlanIntake(message = {}) {
   const subject = clean(message.subject);
   const text = clean(message.text || message.snippet);
   if (message.contacts && message.contacts.source && message.contacts.source.role === "agent") return false;
-  if (/^(?:floorplandrawings|fpd|floor\s+plan)\s+quote\b/i.test(subject) || /\bquote\s+ready\b/i.test(subject)) return false;
+  const explicitQuoteRequest = EXPLICIT_QUOTE_REQUEST.test(text);
+  if (/^(?:floorplandrawings|fpd|floor\s+plan)\s+quote\b/i.test(subject) || (/\bquote\s+ready\b/i.test(subject) && !explicitQuoteRequest)) return false;
   if (/^\[TEST\s+—\s+NO\s+WORKFLOW\]/i.test(subject)) return false;
   const attachments = Array.isArray(message.attachmentNames) ? message.attachmentNames.join(" ") : "";
   const searchable = `${subject}\n${text}\n${attachments}`;
@@ -251,7 +263,7 @@ function isLikelyFloorPlanIntake(message = {}) {
   // floor plan can never become a fresh Job. The future phone integration can
   // attach these messages to an existing conversation with stronger context.
   if (isGoogleVoiceNotification(message)) return false;
-  const hasMarker = FPD_INTAKE_MARKERS.test(searchable);
+  const hasMarker = FPD_INTAKE_MARKERS.test(searchable) || EXPLICIT_QUOTE_REQUEST.test(searchable);
   const hasAddress = Boolean(clean(message.propertyAddress)) || /\b\d{1,6}\s+[A-Za-z0-9][^\n,]{1,80}\b(?:street|st|avenue|ave|boulevard|blvd|drive|dr|road|rd|lane|ln|court|ct|place|pl|way|parkway|pkwy|circle|cir|terrace|ter|highway|hwy)\b/i.test(searchable);
   const websiteMarker = /floorplandrawings\.com|floor\s*plan\s*drawings/i.test(searchable);
   return hasMarker && (hasAddress || websiteMarker || /new\s+request|quick\s+quote|site\s+map/i.test(subject));

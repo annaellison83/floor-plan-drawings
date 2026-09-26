@@ -60,3 +60,34 @@ test("progress updates persist status, stage, metadata, and a progress event", (
   assert.equal(event.data.after.stage, "scheduled");
   assert.equal(event.data.note, "Client selected the confirmed appointment");
 });
+
+test("communication review queue is idempotent and stores only a summary", () => {
+  const store = new ProjectStateStore();
+  const first = store.queueCommunicationReview({
+    communication: "comm:test",
+    channel: "sms",
+    bodySummary: "A client message",
+    sender: { phone: "+13235550142" },
+    metadata: { token: "should-not-be-stored" },
+    matchReason: "no-safe-match"
+  });
+  const second = store.queueCommunicationReview({ communication: "comm:test", bodySummary: "duplicate" });
+  assert.equal(first.duplicate, false);
+  assert.equal(second.duplicate, true);
+  assert.equal(store.listCommunicationReviews().length, 1);
+  assert.equal(first.review.bodySummary, "A client message");
+  assert.equal("metadata" in first.review, false);
+  const resolved = store.resolveCommunicationReview("comm:test", { recordId: "rec-job-1", actor: "anna" });
+  assert.equal(resolved.status, "resolved");
+  assert.equal(resolved.recordId, "rec-job-1");
+});
+
+test("bridge heartbeat is recorded and can be marked alerted", () => {
+  const store = new ProjectStateStore();
+  const heartbeat = store.recordHeartbeat({ bridgeId: "mac-mini", channel: "imessage", version: "1.0.0", queuedInbound: 2, metadata: { apiKey: "hidden" } });
+  assert.equal(heartbeat.bridgeId, "mac-mini");
+  assert.equal(store.listHeartbeats()[0].queuedInbound, 2);
+  assert.equal("apiKey" in store.listHeartbeats()[0].metadata, false);
+  store.updateHeartbeatAlert("mac-mini", { alertState: "alerted", alertSentAt: "2026-09-26T12:00:00.000Z" });
+  assert.equal(store.listHeartbeats()[0].alertState, "alerted");
+});

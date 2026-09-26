@@ -116,6 +116,13 @@ tried only after the primary provider's retries fail. Set `DELIVERY_ALERT_EMAIL`
 to receive a failure alert after a delivery is marked failed; the alert never
 contains credentials.
 
+`SMTP_USER` is the authenticated/sending account. Set
+`INTERNAL_NOTIFICATION_EMAIL` when internal workflow mail should go to a
+separate operator mailbox such as `anna@floorplandrawings.com`; it defaults to
+`SMTP_USER` for backwards compatibility. Add Anna's address to
+`GMAIL_AGENT_EMAILS` so Gmail intake role classification treats her as an
+internal/agent contact.
+
 Anna can inspect the latest failed delivery records with the protected
 `GET /api/ops/delivery-failures` endpoint and the `X-Admin-Token` header. This
 endpoint is read-only and returns only workflow, record, subject, status, and
@@ -308,6 +315,79 @@ until Anna approves a new confirmation design. `ENABLE_APPOINTMENT_REMINDERS`
 is false by default. When reminders are
 enabled, Render checks scheduled projects every `APPOINTMENT_REMINDER_POLL_MS`
 and sends one reminder in the 20–28 hour window before the stored appointment.
+
+## Phone communications and the FPD mailbox
+
+The confirmed FPD business line is `(213) 435-7223` (`+12134357223`). The
+phone path remains deliberately channel-neutral until that number is confirmed
+as provider-backed SMS/MMS, iMessage, or a carrier-app-only line. Record it as
+`BUSINESS_PHONE_NUMBER` when configuring the eventual provider adapter.
+`server/communications.js` normalizes phone numbers to E.164, preserves the
+provider message ID and conversation ID, and matches in this order: external
+message ID, conversation/thread ID, normalized property key, then a unique
+verified phone/email. Ambiguous or unmatched messages never create a Job; they
+are stored as a short-lived-summary review item.
+
+Google Voice email notifications are recognized as SMS transport. They are not
+eligible for new-job auto-creation, but the Gmail poll can attach one to an
+existing Job or put it in the protected review queue. This keeps a reply about
+an existing property from becoming a duplicate Job.
+
+The generic adapter endpoint is staged behind `ENABLE_PHONE_COMMUNICATION_INGEST`:
+
+- `POST /api/communications/inbound` — accepts a signed normalized envelope for
+  `sms`, `mms`, `imessage`, or `email`; it logs only a matched existing Job or
+  queues the message for review.
+- `GET /api/ops/communications/review` — Anna-only review queue.
+- `POST /api/ops/communications/review/:communication/resolve` — manually
+  attaches one review item to a selected existing Airtable Job and writes its
+  idempotent Communication Log row.
+- `POST /api/phone/heartbeat` — signed bridge heartbeat; accepts bridge ID,
+  version, queue depth, and last successful send/receive timestamps.
+- `GET /api/ops/phone/heartbeats` — Anna-only heartbeat status.
+
+Set `AIRTABLE_COMMUNICATION_EXTENDED_FIELDS=true` only after adding these
+optional fields to `Communication Log`: `External Message ID`, `Conversation
+ID`, `Sender`, `Recipients`, `Received At`, `Body Summary`, `Match Confidence`,
+`Match Reason`, and `Attachment IDs`. Until then, the writer uses the existing
+Communication Log schema. Raw phone message bodies are not persisted by the
+channel-neutral path; only a bounded searchable summary is retained in Render
+state.
+
+### One Gmail surface for two addresses
+
+The confirmed business line is separate from the email routing decision. The
+least burdensome email experience is to create `anna@floorplandrawings.com` on
+the current iCloud custom domain, forward it to Anna's existing Gmail with an
+`FPD` label, and configure Gmail `Send mail as` for both `anna@...` and
+`hello@...`. A separate Google Workspace mailbox is only needed if FPD must
+have an independent mailbox, retention boundary, or delegated account. Gmail's
+Multiple Inboxes view can show `label:FPD` as a separate section beside her
+normal inbox, while `Send mail as` lets her reply
+as the FPD identity. Keep the FPD mailbox copy for retention. The backend can
+continue polling the existing `[FPD] Intake` label in Anna's mailbox, or the
+OAuth credential can be moved to the FPD mailbox; choose exactly one backend
+intake source.
+
+If the FPD address is a Google mailbox, delegation is the cleaner desktop
+alternative: Anna opens the delegated inbox from Gmail's account menu and can
+read, send, and delete from that mailbox without sharing its password. Google
+currently notes that delegated-account support in the iOS/Android Gmail apps is
+still rolling out, so mobile use should be tested before relying on delegation
+alone. For mobile, adding both accounts to the Gmail app and using **All
+inboxes** is the safer fallback.
+
+Do not use a Gmail alias as a substitute for a second mailbox: an alias changes
+the From identity but does not give the backend an independent inbox or
+independent retention boundary. Configure only one backend intake source for
+FPD mail to avoid duplicate Gmail/API and forwarded-copy processing. The
+current `GMAIL_INTAKE_LABEL_ID` flow can remain the intake source while Anna's
+forwarded view is the operator convenience.
+
+The Gmail help pages for [delegation](https://support.google.com/mail/answer/138350),
+[multiple inboxes](https://support.google.com/mail/answer/9694882), and
+[sending from another address](https://support.google.com/mail/answer/22370)
+describe the corresponding UI settings.
 
 ## Calendar reconciliation
 
