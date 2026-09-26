@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { calendarAirtableFields, calendarEventKey, directionlessStreetKey, extractAddress, findProjectMatch, isLikelyWorkEvent, jobIdForCalendarEvent, mergeCalendarAirtableFields, normalizeAddress, propertyCoreKey, shouldSkipBlankAddressCreate, streetAddressKey } = require("./calendar-sync");
+const { calendarAirtableFields, calendarEventKey, directionlessStreetKey, extractAddress, findProjectMatch, isLikelyWorkEvent, jobIdForCalendarEvent, mergeCalendarAirtableFields, normalizeAddress, propertyCoreKey, shouldSkipBlankAddressCreate, streetAddressKey, streetAddressValue } = require("./calendar-sync");
 
 const calendar = { name: "Corrie", url: "https://caldav.example/corrie/" };
 const event = {
@@ -38,6 +38,12 @@ test("street keys discard location suffixes but retain explicit units", () => {
   assert.equal(streetAddressKey("26611 Marigold Court"), "26611 marigold ct");
   assert.equal(directionlessStreetKey("8460 W Kirkwood Dr"), directionlessStreetKey("8460 Kirkwood Dr"));
   assert.equal(propertyCoreKey("1200 Elm Ave, Unit H"), "1200 elm ave");
+});
+
+test("street address cleanup never stores request-body text", () => {
+  assert.equal(streetAddressValue("93 Reever Way 300 sqft with color? I attached an example"), "93 Reever Way");
+  assert.equal(streetAddressValue("1200 Elm Ave Unit H San Gabriel, CA 91775"), "1200 Elm Ave Unit H");
+  assert.equal(streetAddressValue("317-321 Ocean Park Blvd & 2528 4th St"), "317-321 Ocean Park Blvd & 2528 4th St");
 });
 
 test("calendar project matching reconciles a unit omitted by the event title", () => {

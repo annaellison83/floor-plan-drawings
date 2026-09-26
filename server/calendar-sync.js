@@ -27,8 +27,17 @@ function normalizeAddress(value) {
 // city/state/ZIP appended, or a unit omitted by the calendar title). Keep the
 // unit when it is explicit so separate apartments do not collapse together.
 function streetAddressValue(value) {
-  let source = clean(value).replace(/\s+/g, " ");
+  const raw = clean(value);
+  let source = raw.replace(/\s+/g, " ");
   if (!source) return "";
+  // Intake messages sometimes put the request body directly after the street
+  // address. Keep the explicit multi-property form intact, but cut a stray
+  // body/signature once the first street suffix has been reached.
+  const hasCommaUnit = /,\s*(?:unit|suite|apt|#)\s*[A-Za-z0-9-]+/i.test(source);
+  if (!source.includes(" & ") && !hasCommaUnit) {
+    const streetPrefix = source.match(/^(\d{1,6}(?:-\d{1,6})?\s+[A-Za-z0-9][^,]*?\b(?:street|st|avenue|ave|boulevard|blvd|drive|dr|road|rd|lane|ln|court|ct|place|pl|way|parkway|pkwy|circle|cir|terrace|ter|highway|hwy)\b(?:\s+(?:#|unit|suite|apt)\s*[A-Za-z0-9-]+)?)(?=\s|,|$)/i);
+    if (streetPrefix && streetPrefix[1]) source = streetPrefix[1];
+  }
   const segments = source.split(",").map(clean).filter(Boolean);
   const unitSegment = segments.slice(1).find((segment) => /^(?:unit|suite|apt|#)\s*[A-Za-z0-9-]+$/i.test(segment));
   if (segments.length > 1) source = segments[0] + (unitSegment ? `, ${unitSegment}` : "");
