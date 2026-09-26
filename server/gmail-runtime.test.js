@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { addressParts, classifyContacts, createGmailClient, extractClientName, extractPropertyAddress, gmailConfig, isLikelyFloorPlanIntake, parseGmailMessage, processIntakeMessages } = require("./gmail-runtime");
+const { addressParts, classifyContacts, createGmailClient, extractClientName, extractPropertyAddress, gmailConfig, isLikelyFloorPlanIntake, parseGmailMessage, processIntakeMessages, resolveIntakeContacts } = require("./gmail-runtime");
 
 test("gmailConfig reads OAuth and intake settings", () => {
   const config = gmailConfig({ GMAIL_CLIENT_ID: "id", GMAIL_CLIENT_SECRET: "secret", GMAIL_REFRESH_TOKEN: "refresh", GMAIL_INTAKE_LABEL_ID: "Label_29", ENABLE_GMAIL_AUTO_LABEL: "true", GMAIL_AUTO_LABEL_QUERY: "floor plan", GMAIL_AGENT_EMAILS: "anna@example.com, worker@example.com" });
@@ -16,6 +16,40 @@ test("address parsing handles display names and bare addresses", () => {
 test("contacts keep source, agent, and client roles separate", () => {
   const result = classifyContacts({ from: [{ name: "Conrad", email: "conrad@example.com" }], to: [{ name: "Anna", email: "anna@example.com" }, { name: "Client", email: "client@example.com" }], agentEmails: ["anna@example.com", "conrad@example.com"], clientEmails: ["client@example.com"] });
   assert.equal(result.source.role, "agent"); assert.deepEqual(result.agent.map((item) => item.email), ["conrad@example.com", "anna@example.com"]); assert.deepEqual(result.client.map((item) => item.email), ["client@example.com"]);
+});
+
+test("resolves a single external intake sender as the client", () => {
+  const result = resolveIntakeContacts({
+    contacts: {
+      source: { name: "Sara Kaye", email: "sara@example.com", role: "unknown" },
+      agent: [],
+      client: [],
+      unknown: [{ name: "Sara Kaye", email: "sara@example.com", role: "unknown" }]
+    },
+    subject: "Floor plan request | 1917 Eden Ave",
+    text: "Please quote this floor plan.",
+    clientName: "Sara Kaye"
+  });
+  assert.equal(result.roleResolution, "inferred-external-intake-sender");
+  assert.deepEqual(result.client.map((item) => item.email), ["sara@example.com"]);
+  assert.equal(result.unknown.length, 0);
+});
+
+test("keeps a sender for review when the message is clearly from a broker", () => {
+  const result = resolveIntakeContacts({
+    contacts: {
+      source: { name: "Broker Name", email: "broker@example.com", role: "unknown" },
+      agent: [],
+      client: [],
+      unknown: [{ name: "Broker Name", email: "broker@example.com", role: "unknown" }]
+    },
+    subject: "Floor plan request | 1917 Eden Ave",
+    text: "I am the listing agent requesting this on behalf of the client.",
+    clientName: ""
+  });
+  assert.equal(result.roleResolution, "needs-review");
+  assert.equal(result.client.length, 0);
+  assert.equal(result.unknown.length, 1);
 });
 
 test("structured intake extraction handles floor plan and site map subjects", () => {
@@ -43,6 +77,15 @@ test("address parsing ignores a signature-only brokerage address", () => {
 test("parseGmailMessage preserves thread and reply metadata and decodes bodies", () => {
   const parsed = parseGmailMessage({ id: "m1", threadId: "t1", historyId: "h1", internalDate: "10", labelIds: ["Label_29"], payload: { headers: [{ name: "From", value: "Agent <agent@example.com>" }, { name: "To", value: "Anna <anna@example.com>" }, { name: "Subject", value: "Floor plan request" }, { name: "Message-ID", value: "<m1@example.com>" }, { name: "References", value: "<old@example.com>" }], parts: [{ mimeType: "text/plain", body: { data: Buffer.from("Hello").toString("base64url") } }] } }, { agentEmails: ["agent@example.com"] });
   assert.equal(parsed.threadId, "t1"); assert.equal(parsed.messageId, "<m1@example.com>"); assert.equal(parsed.text, "Hello"); assert.equal(parsed.contacts.source.role, "agent");
+});
+
+test("parseGmailMessage carries inferred client role for an unconfigured sender", () => {
+  const parsed = parseGmailMessage({ id: "m2", threadId: "t2", payload: { headers: [
+    { name: "From", value: "Sara Kaye <sara@example.com>" },
+    { name: "Subject", value: "Floor plan request | 1917 Eden Ave" }
+  ], parts: [{ mimeType: "text/plain", body: { data: Buffer.from("Please quote this floor plan.").toString("base64url") } }] } });
+  assert.deepEqual(parsed.contacts.client.map((item) => item.email), ["sara@example.com"]);
+  assert.equal(parsed.contacts.roleResolution, "inferred-external-intake-sender");
 });
 
 test("FPD auto-label heuristic requires a marker plus an address and rejects unrelated mail", () => {

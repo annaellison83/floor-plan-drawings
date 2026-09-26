@@ -58,11 +58,50 @@ function classifyContacts({ from = [], to = [], cc = [], agentEmails = [], clien
   const classify = (contact) => ({ ...contact, role: agentSet.has(contact.email) ? "agent" : clientSet.has(contact.email) ? "client" : "unknown" });
   const contacts = [...from, ...to, ...cc].map(classify);
   return {
-    // Never infer that a sender is the client; resolve this per project when needed.
+    // Keep the raw classification separate; resolveIntakeContacts applies the
+    // intake-specific external-sender rule after the message context is known.
     source: from[0] ? classify(from[0]) : null,
     agent: contacts.filter((contact) => contact.role === "agent"),
     client: contacts.filter((contact) => contact.role === "client"),
     unknown: contacts.filter((contact) => contact.role === "unknown")
+  };
+}
+
+function contactNameKey(value) {
+  return clean(value).toLowerCase().replace(/[^a-z0-9]+/g, "").trim();
+}
+
+function isExternalContact(contact) {
+  const email = clean(contact && contact.email).toLowerCase();
+  return Boolean(email && !/annaellison|floorplandrawings|noreply|no-reply/i.test(email));
+}
+
+function resolveIntakeContacts({ contacts = {}, subject = "", text = "", clientName = "" } = {}) {
+  const agent = Array.isArray(contacts.agent) ? contacts.agent : [];
+  const client = Array.isArray(contacts.client) ? contacts.client : [];
+  const unknown = Array.isArray(contacts.unknown) ? contacts.unknown : [];
+  if (client.length || !unknown.length) return { ...contacts, client, agent, unknown, roleResolution: "configured" };
+
+  const source = contacts.source && isExternalContact(contacts.source) ? contacts.source : null;
+  const externalUnknown = unknown.filter(isExternalContact);
+  const searchable = `${clean(subject)}\n${clean(text)}`;
+  const agentContext = /\b(?:listing\s+agent|buyer'?s?\s+agent|realtor|broker|brokerage|assistant|coordinator|on\s+behalf\s+of)\b/i.test(searchable);
+  const explicitName = contactNameKey(clientName);
+  const senderName = contactNameKey(source && source.name);
+  const senderMatchesExplicitName = !explicitName || !senderName || senderName === explicitName || senderName.includes(explicitName) || explicitName.includes(senderName);
+  const inferred = source && senderMatchesExplicitName && !agentContext
+    ? source
+    : externalUnknown.length === 1 && !agentContext
+      ? externalUnknown[0]
+      : null;
+  if (!inferred) return { ...contacts, client, agent, unknown, roleResolution: "needs-review" };
+  const remainingUnknown = unknown.filter((contact) => clean(contact.email).toLowerCase() !== clean(inferred.email).toLowerCase());
+  return {
+    ...contacts,
+    client: [...client, { ...inferred, role: "client", roleSource: "inferred-external-intake-sender" }],
+    agent,
+    unknown: remainingUnknown,
+    roleResolution: "inferred-external-intake-sender"
   };
 }
 
@@ -146,15 +185,24 @@ function parseGmailMessage(message, options = {}) {
   const bodies = collectBodies(message && message.payload);
   const attachmentNames = [...new Set(collectAttachmentNames(message && message.payload))];
   const from = addressParts(headers.from), to = addressParts(headers.to), cc = addressParts(headers.cc);
+  const text = bodies.text.join("\n\n").trim();
+  const subject = headers.subject;
+  const clientName = extractClientName(subject, text);
+  const contacts = resolveIntakeContacts({
+    contacts: classifyContacts({ from, to, cc, agentEmails: options.agentEmails || [], clientEmails: options.clientEmails || [] }),
+    subject,
+    text,
+    clientName
+  });
   return {
     id: clean(message && message.id), threadId: clean(message && message.threadId), historyId: clean(message && message.historyId),
     internalDate: Number(message && message.internalDate) || null,
     messageId: headers["message-id"], inReplyTo: headers["in-reply-to"], references: headers.references,
     subject: headers.subject, date: headers.date, from, to, cc, replyTo: addressParts(headers["reply-to"]),
-    contacts: classifyContacts({ from, to, cc, agentEmails: options.agentEmails || [], clientEmails: options.clientEmails || [] }),
-    propertyAddress: extractPropertyAddress(headers.subject, bodies.text.join("\n\n")),
-    clientName: extractClientName(headers.subject, bodies.text.join("\n\n")),
-    text: bodies.text.join("\n\n").trim(), html: bodies.html.join("\n").trim(), attachmentNames,
+    contacts,
+    propertyAddress: extractPropertyAddress(subject, text),
+    clientName,
+    text, html: bodies.html.join("\n").trim(), attachmentNames,
     labelIds: Array.isArray(message && message.labelIds) ? [...message.labelIds] : [], raw: message
   };
 }
@@ -240,4 +288,4 @@ async function processIntakeMessages({ client, onMessage, store = createMemoryId
   return { processed, skipped, nextPageToken: listed.nextPageToken || "" };
 }
 
-module.exports = { addressParts, classifyContacts, collectAttachmentNames, createGmailClient, createMemoryIdempotencyStore, extractClientName, extractPropertyAddress, gmailConfig, isGmailConfigured, isGmailDraftConfigured, isLikelyFloorPlanIntake, parseGmailMessage, processIntakeMessages };
+module.exports = { addressParts, classifyContacts, collectAttachmentNames, createGmailClient, createMemoryIdempotencyStore, extractClientName, extractPropertyAddress, gmailConfig, isGmailConfigured, isGmailDraftConfigured, isLikelyFloorPlanIntake, parseGmailMessage, processIntakeMessages, resolveIntakeContacts };
