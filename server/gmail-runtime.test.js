@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { addressParts, classifyContacts, createGmailClient, extractClientName, extractPropertyAddress, gmailConfig, isLikelyFloorPlanIntake, isWeTransferPaymentConfirmation, parseGmailMessage, processIntakeMessages, resolveIntakeContacts } = require("./gmail-runtime");
+const { addressParts, classifyContacts, createGmailClient, extractClientName, extractPropertyAddress, gmailConfig, isGoogleVoiceNotification, isLikelyFloorPlanIntake, isWeTransferPaymentConfirmation, parseGmailMessage, processIntakeMessages, resolveIntakeContacts } = require("./gmail-runtime");
 
 test("gmailConfig reads OAuth and intake settings", () => {
   const config = gmailConfig({ GMAIL_CLIENT_ID: "id", GMAIL_CLIENT_SECRET: "secret", GMAIL_REFRESH_TOKEN: "refresh", GMAIL_INTAKE_LABEL_ID: "Label_29", ENABLE_GMAIL_AUTO_LABEL: "true", GMAIL_AUTO_LABEL_QUERY: "floor plan", GMAIL_AGENT_EMAILS: "anna@example.com, worker@example.com" });
@@ -79,6 +79,17 @@ test("address parsing ignores Google Voice notification footers", () => {
   const text = "<https://voice.google.com>\nHi there. I dont see the measurements for the outside courtyard.\nTo respond to this text message, reply to this email or visit Google Voice.\nThis email was sent to you because you indicated that you'd like to receive email notifications.\nIf you don't want to receive such emails in the future, please update your email notification settings <https://voice.google.com/settings#messaging>.\nGoogle LLC\n1600 Amphitheatre Pkwy\nMountain View CA 94043 USA";
   assert.equal(extractPropertyAddress("New text message from (917) 216-1077", text), "");
   assert.equal(isLikelyFloorPlanIntake({ subject: "New text message from (917) 216-1077", text, propertyAddress: "" }), false);
+});
+
+test("Google Voice replies never auto-create a new intake", () => {
+  const message = {
+    subject: "New text message from (917) 216-1077",
+    text: "Please measure 1505 Jones Street for the floor plan.",
+    propertyAddress: "1505 Jones Street",
+    contacts: { source: { email: "13239403024.19172161077.6vbg5nrwlz@txt.voice.google.com" } }
+  };
+  assert.equal(isGoogleVoiceNotification(message), true);
+  assert.equal(isLikelyFloorPlanIntake(message), false);
 });
 
 test("parseGmailMessage preserves thread and reply metadata and decodes bodies", () => {

@@ -127,6 +127,7 @@ function collectAttachmentNames(part, result = []) {
 
 const STREET_SUFFIX = /\b(?:street|st|avenue|ave|boulevard|blvd|drive|dr|road|rd|lane|ln|court|ct|place|pl|way|parkway|pkwy|circle|cir|terrace|ter|highway|hwy)\b/i;
 const GOOGLE_VOICE_FOOTER = /\b(?:to respond to this text message|your account\s+https?:\/\/voice\.google\.com|this email was sent to you because you indicated that you'd like to receive email notifications|please update your email notification settings|google llc)\b/i;
+const GOOGLE_VOICE_SENDER = /@txt\.voice\.google\.com$/i;
 
 function titleCase(value) {
   return clean(value).replace(/\b([a-z])/gi, (match) => match.toUpperCase());
@@ -155,6 +156,14 @@ function stripAutomatedFooter(text) {
   const lines = raw.split(/\r?\n/);
   const footerIndex = lines.findIndex((line) => /^(?:to respond to this text message|your account\b|this email was sent to you because|google llc\b)/i.test(clean(line)));
   return (footerIndex >= 0 ? lines.slice(0, footerIndex) : lines).join("\n").trim();
+}
+
+function isGoogleVoiceNotification(message = {}) {
+  const sourceEmail = clean(message.contacts && message.contacts.source && message.contacts.source.email).toLowerCase();
+  const searchable = `${clean(message.subject)}\n${clean(message.text || message.snippet)}`;
+  return GOOGLE_VOICE_SENDER.test(sourceEmail)
+    || /\bnew text message from\b/i.test(searchable)
+    || GOOGLE_VOICE_FOOTER.test(searchable);
 }
 
 function extractPropertyAddress(subject, text) {
@@ -237,7 +246,11 @@ function isLikelyFloorPlanIntake(message = {}) {
   const attachments = Array.isArray(message.attachmentNames) ? message.attachmentNames.join(" ") : "";
   const searchable = `${subject}\n${text}\n${attachments}`;
   if (!searchable || FPD_NON_INTAKE_MARKERS.test(searchable)) return false;
-  if (GOOGLE_VOICE_FOOTER.test(searchable) && !clean(message.propertyAddress)) return false;
+  // Google Voice mail is a notification/reply channel, not a reliable new-job
+  // intake source. Hold it out of automatic creation so a reply about another
+  // floor plan can never become a fresh Job. The future phone integration can
+  // attach these messages to an existing conversation with stronger context.
+  if (isGoogleVoiceNotification(message)) return false;
   const hasMarker = FPD_INTAKE_MARKERS.test(searchable);
   const hasAddress = Boolean(clean(message.propertyAddress)) || /\b\d{1,6}\s+[A-Za-z0-9][^\n,]{1,80}\b(?:street|st|avenue|ave|boulevard|blvd|drive|dr|road|rd|lane|ln|court|ct|place|pl|way|parkway|pkwy|circle|cir|terrace|ter|highway|hwy)\b/i.test(searchable);
   const websiteMarker = /floorplandrawings\.com|floor\s*plan\s*drawings/i.test(searchable);
@@ -321,4 +334,4 @@ async function processIntakeMessages({ client, onMessage, store = createMemoryId
   return { processed, skipped, nextPageToken: listed.nextPageToken || "" };
 }
 
-module.exports = { addressParts, classifyContacts, collectAttachmentNames, createGmailClient, createMemoryIdempotencyStore, extractClientName, extractPropertyAddress, gmailConfig, isGmailConfigured, isGmailDraftConfigured, isLikelyFloorPlanIntake, isWeTransferPaymentConfirmation, parseGmailMessage, processIntakeMessages, resolveIntakeContacts };
+module.exports = { addressParts, classifyContacts, collectAttachmentNames, createGmailClient, createMemoryIdempotencyStore, extractClientName, extractPropertyAddress, gmailConfig, isGmailConfigured, isGmailDraftConfigured, isGoogleVoiceNotification, isLikelyFloorPlanIntake, isWeTransferPaymentConfirmation, parseGmailMessage, processIntakeMessages, resolveIntakeContacts };
