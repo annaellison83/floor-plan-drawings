@@ -4,6 +4,7 @@ const {
   communicationKey,
   communicationLogFields,
   heartbeatConfig,
+  isInternalPhone,
   matchCommunicationToJobs,
   normalizeCommunication,
   normalizePhone,
@@ -14,6 +15,13 @@ test("normalizes US phone numbers to E.164", () => {
   assert.equal(normalizePhone("(323) 555-0142"), "+13235550142");
   assert.equal(normalizePhone("+1 323 555 0142"), "+13235550142");
   assert.equal(normalizePhone("not a phone"), "");
+});
+
+test("recognizes both business numbers so they are not saved as client phones", () => {
+  assert.equal(isInternalPhone("(443) 621-3024"), true);
+  assert.equal(isInternalPhone("(213) 435-7223"), true);
+  assert.equal(isInternalPhone("(213) 555-0199"), false);
+  assert.equal(isInternalPhone("(999) 111-2222", { BUSINESS_PHONE_NUMBER: "+19991112222" }), true);
 });
 
 test("communication keys are stable without retaining the message body", () => {

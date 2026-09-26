@@ -130,6 +130,15 @@ test("maps an Airtable aerial attachment for durable email caching", () => {
   assert.equal(job.aerialAttachmentUrl, "https://v5.airtableusercontent.com/attachment.jpg");
 });
 
+test("keeps appointment confirmation date separate from appointment date", () => {
+  const job = mapJob({ fields: {
+    "Appointment Date/Time": "2026-09-28T16:00:00.000Z",
+    "Client Response At": "2026-09-26T18:30:00.000Z"
+  }});
+  assert.equal(job.appointmentDateTime, "2026-09-28T16:00:00.000Z");
+  assert.equal(job.scheduledConfirmedAt, "2026-09-26T18:30:00.000Z");
+});
+
 test("builds a deterministic idempotency key and communication log payload", () => {
   assert.equal(
     communicationKey("rec08dRgUXUMPajMt", "QUOTE READY"),

@@ -2,6 +2,7 @@ const crypto = require("node:crypto");
 const { directionlessStreetKey, normalizeAddress, propertyCoreKey, streetAddressKey, streetAddressValue } = require("./calendar-sync");
 const { buildAerialFallbackLink, buildZimasAddressLink, ensurePropertyLinks } = require("./property-links");
 const { isWeTransferPaymentConfirmation } = require("./gmail-runtime");
+const { isInternalPhone } = require("./communications");
 
 function clean(value) {
   return value === undefined || value === null ? "" : String(value).trim();
@@ -73,7 +74,7 @@ function messageContactEmail(message = {}, candidate = null) {
 function messageContactPhone(message = {}) {
   const matches = [...`${clean(message.subject)}\n${clean(message.text)}`.matchAll(/(?:\+?1[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]\d{4}\b/g)]
     .map((match) => match[0].replace(/\s+/g, " ").trim())
-    .filter((phone, index, values) => phone.replace(/\D/g, "") !== "4436213024" && values.indexOf(phone) === index);
+    .filter((phone, index, values) => !isInternalPhone(phone) && values.indexOf(phone) === index);
   return matches.length ? matches[0] : "";
 }
 

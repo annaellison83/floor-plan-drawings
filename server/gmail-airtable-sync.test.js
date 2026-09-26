@@ -124,6 +124,17 @@ test("does not store a phone-number sender label as the client name", () => {
   assert.equal(fields["Client Phone"], "(917) 216-1077");
 });
 
+test("does not store either FPD business line as a client phone", () => {
+  const fields = gmailAirtableFields({
+    id: "msg-business-line",
+    threadId: "thread-business-line",
+    propertyAddress: "1600 Amphitheatre Pkwy",
+    subject: "Call us at (213) 435-7223 or (310) 555-0142",
+    text: "Please review the measurements."
+  });
+  assert.equal(fields["Client Phone"], "(310) 555-0142");
+});
+
 test("clears a phone-number placeholder already stored as a client name", () => {
   const record = { id: "rec-google-voice", fields: { "Client Name": "(917) 216-1077", "Client Phone": "(917) 216-1077" } };
   const patch = patchMissingGmailFields(record, { "Client Phone": "(917) 216-1077" });

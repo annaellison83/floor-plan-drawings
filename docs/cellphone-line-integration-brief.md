@@ -4,6 +4,23 @@
 
 Give Anna one dependable communications path for the new business number. Inbound messages and emails should be attached to the right job, outbound replies should be possible from the same identity, and a computer or bridge outage should create an alert before messages are missed.
 
+## Current build status
+
+The confirmed number is `(213) 435-7223` (`+12134357223`). The first phase is
+implemented as a read-only Mac Messages ingest probe for Anna's logged-in Mac
+session, with a durable SQLite row checkpoint, strict destination filtering,
+sender normalization, attachment-aware channel detection, and optional signed
+forwarding to the hosted communication endpoint. It is currently in dry-run
+mode: the test message was detected locally, but no server request, Airtable
+write, outbound reply, or checkpoint advance has occurred.
+
+The hosted communication boundary, review queue, deduplication key, heartbeat
+endpoint, stale-bridge monitor, and migration-aware business-number filtering
+are staged in the backend. Activation still requires deploying that backend,
+setting the ingest token and feature flags, and then loading the Anna-session
+LaunchAgent. Outbound sending remains intentionally unimplemented until the
+inbound path has been shadow-tested.
+
 ## First decision: what kind of number is this?
 
 Before implementation, confirm whether the new number is:
@@ -19,7 +36,7 @@ The answer changes the design. iMessage has no supported general-purpose server 
 1. **Channel adapters**
    - Gmail adapter: Gmail history/watch where available, with polling fallback.
    - SMS/MMS adapter: provider webhooks and outbound API if the number is provider-backed.
-   - iMessage adapter, only if required: a small macOS bridge that reads new rows from `~/Library/Messages/chat.db` and exposes a local authenticated API for outbound sends. Keep this adapter replaceable so the rest of the system does not depend on AppleScript or UI automation.
+   - iMessage adapter, only if required: a small macOS bridge that reads new rows from `~/Library/Messages/chat.db` and forwards normalized inbound envelopes to the hosted endpoint. Keep this adapter replaceable so the rest of the system does not depend on AppleScript or UI automation. Outbound sends remain a later, human-approved phase.
 
 2. **Normalization and matching**
    - Normalize phone numbers to E.164 and email addresses to lowercase.
@@ -65,7 +82,7 @@ The answer changes the design. iMessage has no supported general-purpose server 
 3. Add matching, deduplication, review queue, and audit logging before enabling any replies.
 4. Add the outbound approval queue and one-channel send test.
 5. Add heartbeat monitoring and simulate a 15-minute outage.
-6. Add the iMessage bridge only if the number truly needs iMessage; otherwise use a provider webhook/API.
+6. Add the iMessage bridge only if the number truly needs iMessage; otherwise use a provider webhook/API. For the current number, the bridge is installed for dry-run verification but not loaded as a live LaunchAgent.
 7. Run a one-week shadow period, compare every inbound message against Gmail/Messages, then enable limited automation.
 
 ## Acceptance criteria

@@ -22,6 +22,20 @@ function normalizePhone(value, { defaultCountryCode = "1" } = {}) {
   return "";
 }
 
+// These numbers belong to FloorPlanDrawings, not to a client. Keep the former
+// line during the migration window, and use BUSINESS_PHONE_NUMBER for the
+// active line so intake parsers do not accidentally save the business number
+// as a client's contact detail.
+const LEGACY_BUSINESS_PHONE = "+14436213024";
+const DEFAULT_BUSINESS_PHONE = "+12134357223";
+
+function isInternalPhone(value, env = process.env) {
+  const phone = normalizePhone(value);
+  if (!phone) return false;
+  const configured = normalizePhone(env && env.BUSINESS_PHONE_NUMBER) || DEFAULT_BUSINESS_PHONE;
+  return [LEGACY_BUSINESS_PHONE, DEFAULT_BUSINESS_PHONE, configured].includes(phone);
+}
+
 function phoneCandidates(value) {
   return [...clean(value).matchAll(/(?:\+?\d[\d\s().-]{7,}\d)/g)]
     .map((match) => normalizePhone(match[0]))
@@ -258,6 +272,7 @@ module.exports = {
   communicationKey,
   communicationLogFields,
   heartbeatConfig,
+  isInternalPhone,
   matchCommunicationToJobs,
   normalizeCommunication,
   normalizeEmail,

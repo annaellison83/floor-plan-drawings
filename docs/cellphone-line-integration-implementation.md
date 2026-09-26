@@ -129,6 +129,43 @@ iCloud Custom Email Domain and used with the same domain/mail system as
 mail while keeping `SMTP_USER`/`MAIL_FROM` as the FPD business sender. No
 Google Workspace migration is required.
 
+## Client phone-number migration
+
+This is a contact migration, not an immediate carrier port. Keep the previous
+business number active for a 60–90 day transition window while
+`+12134357223` becomes the canonical number for new work.
+
+Build the migration queue from open Jobs, active quotes, scheduled
+appointments, and recent clients. Avoid mass-texting old archival contacts;
+use email or an approved individual message when there is a current business
+reason to contact them. Never use a group text that exposes client numbers to
+other clients.
+
+For each selected client, send an individual message from the new number:
+
+> Hi [Name] — this is Anna with Floor Plan Drawings. Our business text number
+> is now (213) 435-7223. Please save this number and text us here going
+> forward. Thank you!
+
+Track `Primary Phone`, `Previous Phone`, `Phone Migration Status`, `Migration
+Notice Sent At`, and `Migration Notes` on the client/contact record, or in a
+small companion table if the existing Jobs schema should remain unchanged.
+Messages received on the old number remain visible during the transition and
+receive an approved reminder directing the sender to the new number. They are
+not silently merged into a new iMessage thread.
+
+Apple makes the device experience seamless, but the old and new numbers remain
+distinct messaging identities. A client’s existing conversation addressed to
+the old number will not automatically become a conversation addressed to the
+new number. The Mac bridge therefore carries line/destination metadata so
+legacy and canonical traffic can be separated during cutover.
+
+After the first notice pass, update the website, email signatures, quote and
+invoice templates, scheduling messages, voicemail, client portal, and public
+business listings. Send a second reminder only to active/open clients after
+roughly 30 days. Retire or port the previous number only after no active Job
+depends on it and the transition review is complete.
+
 ## Number decision matrix
 
 | Number type | Recommended adapter | Anna's outbound path | Main risk |
@@ -177,3 +214,29 @@ Airtable schema migration.
 
 No credentials, provider selection, Airtable records, calendar events, or
 outbound phone messages are changed by this implementation.
+
+## Activation gate — intentionally not run yet
+
+After the backend is deployed, configure these Render variables with a
+locally generated secret (never in git or chat):
+
+```text
+BUSINESS_PHONE_NUMBER=+12134357223
+ENABLE_PHONE_COMMUNICATION_INGEST=true
+COMMUNICATION_INGEST_TOKEN=<generated-secret>
+ENABLE_PHONE_BRIDGE_MONITOR=true
+PHONE_BRIDGE_ALERT_EMAIL=<Anna's approved alert address>
+```
+
+The Gmail sync flag is not required for the generic phone/iMessage endpoint.
+The endpoint can load Jobs directly from Airtable, match a message, write one
+idempotent Communication Log row, or place an unmatched message in review.
+
+On Anna's logged-in Mac session, put the same token in the mode-600
+`~/.config/floorplandrawings/mac-bridge.env`, copy the staged plist into
+`~/Library/LaunchAgents`, and load it with
+`launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.floorplandrawings.mac-bridge.plist"`.
+Test one inbound message, confirm the Communication Log/review result and
+heartbeat, then run the duplicate/checkpoint test before leaving the bridge
+loaded. The current session has not crossed this gate: the plist is not
+installed or loaded, and the checkpoint remains at the pre-test row.

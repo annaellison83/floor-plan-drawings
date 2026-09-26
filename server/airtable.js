@@ -1,5 +1,5 @@
 const AIRTABLE_API = "https://api.airtable.com/v0";
-const { communicationLogFields } = require("./communications");
+const { communicationLogFields, isInternalPhone } = require("./communications");
 
 function clean(value) {
   return value === undefined || value === null ? "" : String(value).trim();
@@ -70,7 +70,7 @@ function requestContactParts(value) {
   const phoneMatches = [...text.matchAll(/(?:\+?1[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]\d{4}\b/g)]
     .map((match) => match[0].replace(/\s+/g, " ").trim())
     .filter((phone, index, values) => values.indexOf(phone) === index)
-    .filter((phone) => phone.replace(/\D/g, "") !== "4436213024");
+    .filter((phone) => !isInternalPhone(phone));
   const explicitName = text.match(/(?:^|\n|\b)(?:client|contact|name|day[- ]of\s+contact)\s*:\s*([^\n|]+)/i);
   const explicitNameValue = clean(explicitName && explicitName[1])
     .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "")
@@ -245,6 +245,10 @@ function mapJob(record, options = {}) {
     deliveryDate: first(fields, ["Delivery Date", "Drawing Due Date"]),
     accessInfo: first(fields, ["Access Info", "Access Details"]),
     clientResponse: first(fields, ["Client Response"]),
+    // This is the date the client (or operator) confirmed the appointment.
+    // It is intentionally separate from Appointment Date/Time, which is the
+    // date the visit will happen and belongs in the On calendar column.
+    scheduledConfirmedAt: first(fields, ["Scheduled Confirmed At", "Appointment Confirmed At", "Client Response At", "Confirmation Received At"]),
     annaEmailStatus: first(fields, ["Anna Email Status"]),
     confirmationSentAt: first(fields, ["Client Confirmation Sent At", "Confirmation Sent At"]),
     reminderSentAt: first(fields, ["Client Reminder Sent At", "Reminder Sent At"]),

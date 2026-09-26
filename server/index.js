@@ -292,7 +292,11 @@ async function processInboundCommunication(input, { airtableRecords = null, shad
     return { ok: true, action: "review", duplicate: review.duplicate, communication: communication.communication, match: { confidence: match.confidence, reason: match.reason, candidateRecordIds: (match.candidates || []).map((record) => record.id) } };
   }
   const recordId = clean(match.record.id);
-  if (shadow || !gmailAirtableSyncEnabled()) {
+  // Phone/iMessage ingest has its own feature flag and should not depend on
+  // the Gmail-to-Airtable poller being enabled. The generic endpoint can
+  // fetch Jobs directly when Airtable is configured, while Gmail-originated
+  // Google Voice messages still pass the records supplied by the Gmail poll.
+  if (shadow) {
     projectState.event({ projectId: recordId, type: "communication.matched-shadow", data: { communication: communication.communication, channel: communication.channel, reason: match.reason } });
     return { ok: true, action: "matched-shadow", recordId, communication: communication.communication, match: { confidence: match.confidence, reason: match.reason } };
   }
