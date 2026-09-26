@@ -341,18 +341,17 @@ function calendarSyncRange(input = {}) {
 
 function airtableCalendarMatch(fields, records = []) {
   const jobId = clean(fields["Job ID"]);
-  const eventUid = clean(fields["Calendar Event UID"]);
-  const calendarUrl = clean(fields["Calendar URL"]);
+  const eventUid = clean(fields["Calendar Event ID"]);
   const address = normalizeAddress(fields["Property Address"]);
   const streetKey = streetAddressKey(fields["Property Address"]);
   const coreKey = propertyCoreKey(fields["Property Address"]);
-  const start = clean(fields["Calendar Event Start"]);
+  const start = clean(fields["Appointment Date/Time"]);
   const exact = records.find((record) => {
     const existing = record && record.fields || {};
     if (jobId && clean(existing["Job ID"]) === jobId) return true;
-    if (eventUid && clean(existing["Calendar Event UID"]) === eventUid && (!calendarUrl || clean(existing["Calendar URL"]) === calendarUrl)) return true;
+    if (eventUid && clean(existing["Calendar Event ID"]) === eventUid) return true;
     if (address && normalizeAddress(existing["Property Address"] || existing.Address) === address) {
-      const existingStart = clean(existing["Calendar Event Start"] || existing["Appointment Start"] || existing["Appointment Date"]);
+      const existingStart = clean(existing["Appointment Date/Time"] || existing["Appointment Start"] || existing["Appointment Date"]);
       return !start || !existingStart || new Date(existingStart).getTime() === new Date(start).getTime();
     }
     return false;
@@ -707,7 +706,7 @@ async function syncCalendarToAirtable(input = {}) {
         uid: clean(event.uid),
         summary: clean(event.summary),
         propertyAddress: extractAddress(event) || fields["Property Address"],
-        start: fields["Calendar Event Start"],
+        start: fields["Appointment Date/Time"],
         airtableRecordId,
         renderProjectId: project && project.id || "",
         gmailThreadId: fields["Gmail Thread ID"],

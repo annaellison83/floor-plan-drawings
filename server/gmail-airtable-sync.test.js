@@ -106,6 +106,30 @@ test("uses a single external Gmail sender when no client role is configured", ()
   assert.equal(fields["Client Phone"], "310-555-0142");
 });
 
+test("does not store a phone-number sender label as the client name", () => {
+  const fields = gmailAirtableFields({
+    id: "msg-google-voice",
+    threadId: "thread-google-voice",
+    propertyAddress: "1600 Amphitheatre Pkwy",
+    subject: "New text message from (917) 216-1077",
+    text: "Please review the measurements.",
+    contacts: {
+      source: { name: "(917) 216-1077", email: "13239403024.19172161077.6vbg5nrwlz@txt.voice.google.com" },
+      client: [{ name: "(917) 216-1077", email: "13239403024.19172161077.6vbg5nrwlz@txt.voice.google.com" }],
+      agent: [],
+      unknown: []
+    }
+  });
+  assert.equal(fields["Client Name"], undefined);
+  assert.equal(fields["Client Phone"], "(917) 216-1077");
+});
+
+test("clears a phone-number placeholder already stored as a client name", () => {
+  const record = { id: "rec-google-voice", fields: { "Client Name": "(917) 216-1077", "Client Phone": "(917) 216-1077" } };
+  const patch = patchMissingGmailFields(record, { "Client Phone": "(917) 216-1077" });
+  assert.equal(patch["Client Name"], null);
+});
+
 test("recognizes generated Gmail property fallbacks as replaceable asset placeholders", () => {
   const address = "1917 Eden Ave, Pasadena, CA 91103";
   const fields = gmailAirtableFields({ propertyAddress: address, threadId: "thread-assets", id: "message-assets", subject: "Floor plans", text: "Please quote this address" });

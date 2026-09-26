@@ -75,6 +75,12 @@ test("address parsing ignores a signature-only brokerage address", () => {
   assert.equal(extractPropertyAddress("Floor plan request", "Thanks for sending the address.\n680 E Colorado Blvd, Suite 400, Pasadena, CA 91101"), "680 E Colorado Blvd, Suite 400, Pasadena, CA 91101");
 });
 
+test("address parsing ignores Google Voice notification footers", () => {
+  const text = "<https://voice.google.com>\nHi there. I dont see the measurements for the outside courtyard.\nTo respond to this text message, reply to this email or visit Google Voice.\nThis email was sent to you because you indicated that you'd like to receive email notifications.\nIf you don't want to receive such emails in the future, please update your email notification settings <https://voice.google.com/settings#messaging>.\nGoogle LLC\n1600 Amphitheatre Pkwy\nMountain View CA 94043 USA";
+  assert.equal(extractPropertyAddress("New text message from (917) 216-1077", text), "");
+  assert.equal(isLikelyFloorPlanIntake({ subject: "New text message from (917) 216-1077", text, propertyAddress: "" }), false);
+});
+
 test("parseGmailMessage preserves thread and reply metadata and decodes bodies", () => {
   const parsed = parseGmailMessage({ id: "m1", threadId: "t1", historyId: "h1", internalDate: "10", labelIds: ["Label_29"], payload: { headers: [{ name: "From", value: "Agent <agent@example.com>" }, { name: "To", value: "Anna <anna@example.com>" }, { name: "Subject", value: "Floor plan request" }, { name: "Message-ID", value: "<m1@example.com>" }, { name: "References", value: "<old@example.com>" }], parts: [{ mimeType: "text/plain", body: { data: Buffer.from("Hello").toString("base64url") } }] } }, { agentEmails: ["agent@example.com"] });
   assert.equal(parsed.threadId, "t1"); assert.equal(parsed.messageId, "<m1@example.com>"); assert.equal(parsed.text, "Hello"); assert.equal(parsed.contacts.source.role, "agent");

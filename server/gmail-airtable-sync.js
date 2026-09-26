@@ -40,6 +40,11 @@ function contactName(contact) {
   return clean(contact && contact.name);
 }
 
+function isPhoneLikeName(value) {
+  const text = clean(value);
+  return Boolean(text && /^(?:\+?1[\s.-]?)?(?:\(\d{3}\)|\d{3})[\s.-]?\d{3}[\s.-]?\d{4}$/.test(text));
+}
+
 function externalEmail(value) {
   const email = contactEmail({ email: value });
   return email && !/annaellison|floorplandrawings|noreply|no-reply/i.test(email) ? email : "";
@@ -227,7 +232,7 @@ function gmailAirtableFields(message = {}, project = {}, existing = null) {
   fields["Satellite Photo Link"] = buildAerialFallbackLink(address);
   Object.assign(fields, deliveryFieldsForMessage(message), paymentFieldsForMessage(message));
   const parsedClientName = clean(message.clientName);
-  const candidateName = contactName(client) || parsedClientName || clean(project.clientName);
+  const candidateName = [contactName(client), parsedClientName, clean(project.clientName)].find((value) => value && !isPhoneLikeName(value)) || "";
   if (candidateName && !isAddressLikeClient(candidateName, address)) fields["Client Name"] = candidateName;
   const candidateEmail = messageContactEmail(message, client);
   if (candidateEmail) fields["Client Email"] = candidateEmail;
@@ -240,6 +245,11 @@ function gmailAirtableFields(message = {}, project = {}, existing = null) {
 function patchMissingGmailFields(record, incoming) {
   const existing = record && record.fields || {};
   const patch = {};
+  // Older intake passes sometimes stored a sender's phone number as the
+  // client name. Clear that placeholder as soon as the phone is recognized so
+  // the portal can show the record as missing a real name instead of presenting
+  // a contact detail as though it were a person.
+  if (isPhoneLikeName(existing["Client Name"]) && clean(incoming && incoming["Client Phone"])) patch["Client Name"] = null;
   for (const [key, value] of Object.entries(incoming || {})) {
     if (!clean(value)) continue;
     if (["Payment Status", "Invoice Status", "Payment Evidence URL", "Payment Confirmed At"].includes(key)

@@ -90,6 +90,11 @@ function normalizedClientText(value) {
   return clean(value).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
+function isPhoneLikeName(value) {
+  const text = clean(value);
+  return Boolean(text && /^(?:\+?1[\s.-]?)?(?:\(\d{3}\)|\d{3})[\s.-]?\d{3}[\s.-]?\d{4}$/.test(text));
+}
+
 function isAddressLikeClient(value, address = "") {
   const client = normalizedClientText(value);
   const property = normalizedClientText(address);
@@ -104,18 +109,20 @@ function diagnoseClientData({ propertyAddress = "", clientField = "", clientName
   const email = clean(clientEmail).toLowerCase();
   const phone = clean(clientPhone);
   const addressLike = isAddressLikeClient(clientField || name, propertyAddress);
-  const usableName = Boolean(name && !addressLike);
+  const phoneLike = isPhoneLikeName(clientField || name);
+  const usableName = Boolean(name && !addressLike && !phoneLike);
   const hasEmail = Boolean(email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email));
   const hasPhone = Boolean(phone && phone.replace(/\D/g, "").length >= 10);
   const hasContact = hasEmail || hasPhone;
   const status = usableName && hasContact ? "complete" : usableName || hasContact ? "partial" : "missing";
   let reason = "";
   if (addressLike) reason = "The client field repeats the property address, so it is being treated as an address placeholder.";
+  else if (phoneLike) reason = "The client field contains a phone number, so it is being kept as contact information instead of a name.";
   else if (!usableName && !hasContact) reason = "No client name, email, or phone was found in the Airtable record or the original request.";
   else if (!usableName && hasContact) reason = "A contact detail was found, but no client name was found.";
   else if (usableName && !hasContact) reason = "A client name was found, but no client email or phone was found.";
   else reason = "Client name and contact details were found.";
-  const source = clientField && !addressLike
+  const source = clientField && !addressLike && !phoneLike
     ? "Airtable client field"
     : requestContact.name
       ? "Original request text"
@@ -153,7 +160,10 @@ function mapJob(record, options = {}) {
   const proposalReviewBaseUrl = clean(options.proposalReviewBaseUrl);
   const approvalToken = clean(first(fields, ["Quote Approval Token", "Approval Token"]));
   const verifiedSqFt = Number(first(fields, ["Verified Sq Ft", "Verified Square Feet"]));
-  const propertyAddress = first(fields, ["Full Address", "Property Address", "Address"]);
+  // Property Address is the canonical, cleaned value. Full Address can hold a
+  // raw intake body from older records, so it must never override the clean
+  // field in the operator-facing portal.
+  const propertyAddress = first(fields, ["Property Address", "Full Address", "Address"]);
   const originalRequest = first(fields, ["Original Request", "Client Message", "Client Request"]);
   const clientField = first(fields, ["Client Name", "Name"]);
   const clientEmailField = first(fields, ["Client Email", "Email"]);
@@ -161,7 +171,9 @@ function mapJob(record, options = {}) {
   const derivedAddress = addressParts(propertyAddress);
   const requestParts = requestAddressParts(originalRequest);
   const requestContact = requestContactParts(originalRequest);
-  const mappedClientName = (clientField && !isAddressLikeClient(clientField, propertyAddress)) ? clientField : (requestContact.name || clientField);
+  const mappedClientName = (clientField && !isPhoneLikeName(clientField) && !isAddressLikeClient(clientField, propertyAddress))
+    ? clientField
+    : (requestContact.name && !isPhoneLikeName(requestContact.name) ? requestContact.name : "");
   const mappedClientEmail = clientEmailField || requestContact.email;
   const mappedClientPhone = clientPhoneField || requestContact.phone;
   const detailFields = Object.fromEntries(Object.entries(fields)

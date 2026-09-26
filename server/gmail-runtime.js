@@ -126,6 +126,7 @@ function collectAttachmentNames(part, result = []) {
 }
 
 const STREET_SUFFIX = /\b(?:street|st|avenue|ave|boulevard|blvd|drive|dr|road|rd|lane|ln|court|ct|place|pl|way|parkway|pkwy|circle|cir|terrace|ter|highway|hwy)\b/i;
+const GOOGLE_VOICE_FOOTER = /\b(?:to respond to this text message|your account\s+https?:\/\/voice\.google\.com|this email was sent to you because you indicated that you'd like to receive email notifications|please update your email notification settings|google llc)\b/i;
 
 function titleCase(value) {
   return clean(value).replace(/\b([a-z])/gi, (match) => match.toUpperCase());
@@ -148,6 +149,14 @@ function addressFromPropertyUrl(text) {
   return `${titleCase(before)}, ${stateZip[1].toUpperCase()} ${stateZip[2]}`;
 }
 
+function stripAutomatedFooter(text) {
+  const raw = clean(text);
+  if (!raw) return "";
+  const lines = raw.split(/\r?\n/);
+  const footerIndex = lines.findIndex((line) => /^(?:to respond to this text message|your account\b|this email was sent to you because|google llc\b)/i.test(clean(line)));
+  return (footerIndex >= 0 ? lines.slice(0, footerIndex) : lines).join("\n").trim();
+}
+
 function extractPropertyAddress(subject, text) {
   const headline = clean(subject).replace(/^re:\s*/i, "");
   const pipeParts = headline.split("|").map(clean);
@@ -156,7 +165,12 @@ function extractPropertyAddress(subject, text) {
   if (dashAddress && clean(dashAddress[1])) return clean(dashAddress[1]);
   const inlineAddress = headline.match(/\b\d{1,6}\s+[^\n|,]{1,90}?\b(?:street|st|avenue|ave|boulevard|blvd|drive|dr|road|rd|lane|ln|court|ct|place|pl|way|parkway|pkwy|circle|cir|terrace|ter|highway|hwy)\b(?:\s+(?:#|unit|suite|apt)\s*[A-Za-z0-9-]+)?/i);
   if (inlineAddress && clean(inlineAddress[0])) return clean(inlineAddress[0]);
-  const rawLines = clean(text).split(/\r?\n/);
+  // Google Voice forwards text replies with a long automated footer that ends
+  // in Google's Mountain View address. That address is a footer, never the
+  // property being discussed, so remove the footer before looking for a job
+  // address.
+  const body = stripAutomatedFooter(text);
+  const rawLines = body.split(/\r?\n/);
   // Ignore the trailing signature block when the message has no structured
   // subject address. This prevents a brokerage office address from becoming a
   // new job while retaining addresses in the request body above the sign-off.
@@ -223,6 +237,7 @@ function isLikelyFloorPlanIntake(message = {}) {
   const attachments = Array.isArray(message.attachmentNames) ? message.attachmentNames.join(" ") : "";
   const searchable = `${subject}\n${text}\n${attachments}`;
   if (!searchable || FPD_NON_INTAKE_MARKERS.test(searchable)) return false;
+  if (GOOGLE_VOICE_FOOTER.test(searchable) && !clean(message.propertyAddress)) return false;
   const hasMarker = FPD_INTAKE_MARKERS.test(searchable);
   const hasAddress = Boolean(clean(message.propertyAddress)) || /\b\d{1,6}\s+[A-Za-z0-9][^\n,]{1,80}\b(?:street|st|avenue|ave|boulevard|blvd|drive|dr|road|rd|lane|ln|court|ct|place|pl|way|parkway|pkwy|circle|cir|terrace|ter|highway|hwy)\b/i.test(searchable);
   const websiteMarker = /floorplandrawings\.com|floor\s*plan\s*drawings/i.test(searchable);

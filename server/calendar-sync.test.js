@@ -72,8 +72,9 @@ test("calendar sync fields preserve the thread link and stable event identity", 
     contacts: { client: ["client@example.com"] },
     metadata: { gmailThreadId: "thread-1" }
   });
-  assert.equal(fields["Calendar Event UID"], "event-123");
-  assert.equal(fields["Calendar Sync Source"], "iCloud");
+  assert.equal(fields["Calendar Event ID"], "event-123");
+  assert.equal(fields["Appointment Date/Time"], event.start.toISOString());
+  assert.equal(fields["Appointment Start"], event.start.toISOString());
   assert.equal(fields["Gmail Thread ID"], "thread-1");
   assert.equal(fields["Property Address"], "123 Main St");
 });
@@ -118,6 +119,21 @@ test("calendar sync fills a blank status while retaining blank identity fields",
   assert.equal(patch.Status, "Calendar Imported");
   assert.equal(patch["Job ID"], "CAL-new");
   assert.equal(patch["Website Workflow"], "Calendar");
+});
+
+test("calendar sync backfills appointment dates into known blank Jobs fields", () => {
+  const existing = { fields: { "Property Address": "123 Main St" } };
+  const patch = mergeCalendarAirtableFields(existing, {
+    "Calendar Event ID": "event-123",
+    "Appointment Date/Time": "2026-09-15T18:00:00.000Z",
+    "Appointment Start": "2026-09-15T18:00:00.000Z",
+    "Appointment End": "2026-09-15T19:30:00.000Z",
+    "Source Channels": "calendar"
+  });
+  assert.equal(patch["Calendar Event ID"], "event-123");
+  assert.equal(patch["Appointment Date/Time"], "2026-09-15T18:00:00.000Z");
+  assert.equal(patch["Appointment Start"], "2026-09-15T18:00:00.000Z");
+  assert.equal(patch["Appointment End"], "2026-09-15T19:30:00.000Z");
 });
 
 test("calendar sync fills protected identity fields omitted from the Airtable schema", () => {

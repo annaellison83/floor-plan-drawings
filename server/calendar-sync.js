@@ -5,6 +5,17 @@ function clean(value) {
   return value === undefined || value === null ? "" : String(value).trim();
 }
 
+// These are the Jobs fields that the calendar sync can safely populate. Keep
+// this allowlist aligned with the Airtable Jobs schema so blank fields can be
+// backfilled without sending unsupported calendar metadata to Airtable.
+const CALENDAR_PERSISTED_FIELDS = new Set([
+  "Job ID", "Property Address", "Client Name", "Client Email", "Status",
+  "Website Workflow", "Calendar Event ID", "Appointment Date/Time",
+  "Appointment Start", "Appointment End", "Gmail Thread ID",
+  "Normalized Property Key", "Source Channels", "Google Maps Link",
+  "ZIMAS Link", "Aerial Map URL", "Satellite Photo Link"
+]);
+
 function googleMapsLink(address) {
   const value = clean(address);
   return value ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(value)}` : "";
@@ -146,19 +157,17 @@ function calendarAirtableFields(calendar, event, project = null, gmailMatch = nu
     "Client Email": projectClientEmail || gmailClient && gmailClient.email || "",
     "Status": "Calendar Imported",
     "Website Workflow": "Calendar",
-    "Calendar Event UID": clean(event.uid),
-    "Calendar Name": clean(calendar.name),
-    "Calendar URL": clean(calendar.url),
-    "Calendar Event Start": start,
-    "Calendar Event End": end,
-    "Calendar Event Summary": clean(event.summary),
-    "Calendar Event Description": clean(event.description),
-    "Calendar Event Location": clean(event.location),
-    "Calendar Sync Source": "iCloud",
+    // The Jobs table stores the calendar identity and dates under these
+    // existing fields. The old implementation sent Calendar Event Start and
+    // other names that do not exist in Airtable, so the API silently dropped
+    // the dates from matched rows.
+    "Calendar Event ID": clean(event.uid),
+    "Appointment Date/Time": start,
+    "Appointment Start": start,
+    "Appointment End": end,
     "Gmail Thread ID": project && project.metadata && project.metadata.gmailThreadId || gmailMatch && gmailMatch.threadId || "",
     "Normalized Property Key": streetAddressKey(address),
-    "Source Channels": "calendar",
-    "Calendar Sync Key": calendarEventKey(calendar, event)
+    "Source Channels": "calendar"
   }, linkAddress || address);
   fields["ZIMAS Link"] = buildZimasAddressLink(address);
   fields["Aerial Map URL"] = buildAerialFallbackLink(address);
@@ -169,7 +178,7 @@ function calendarAirtableFields(calendar, event, project = null, gmailMatch = nu
 function mergeCalendarAirtableFields(existingRecord, incomingFields) {
   const existing = existingRecord && existingRecord.fields ? existingRecord.fields : existingRecord || {};
   return Object.fromEntries(Object.entries(incomingFields || {})
-    .filter(([key, value]) => value !== "" && (["Status", "Job ID", "Website Workflow"].includes(key) || Object.prototype.hasOwnProperty.call(existing, key)))
+    .filter(([key, value]) => value !== "" && (["Status", "Job ID", "Website Workflow"].includes(key) || CALENDAR_PERSISTED_FIELDS.has(key) || Object.prototype.hasOwnProperty.call(existing, key)))
     .map(([key, value]) => {
       // Calendar discovery is a source of scheduling metadata, not authority over
       // an existing workflow identity or manually advanced status.
