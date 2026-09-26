@@ -72,7 +72,16 @@ function portalPage() {
       const sqFtNumber = (value) => { const number = Number(String(value ?? "").replace(/,/g, "")); return Number.isFinite(number) && number > 0 ? number : null; };
       const sqFtMarkup = (job) => { const confirmed = sqFtNumber(job.verifiedSqFt); const estimate = sqFtNumber(job.approxSqFt); const value = confirmed || estimate; return value ? Number(value).toLocaleString() + " sq ft" + (confirmed ? " <span class='confirmed-pill'>Confirmed</span>" : "") : ""; };
       const link = (url, label) => url ? "<a class='link' href='" + esc(url) + "' target='_blank' rel='noopener'>" + label + "</a>" : "<span class='unavailable' aria-hidden='true'></span>";
-      const zimasLink = (job) => job.zimasLink || (job.propertyAddress ? "https://zimas.lacity.org/map.asp?address=" + encodeURIComponent(job.propertyAddress) : "");
+      const zimasLink = (job) => {
+        const stored = String(job && job.zimasLink || "").trim();
+        // Address-search links open a generic ZIMAS modal that requires a
+        // second manual GO click. Resolve them through Render so the server
+        // can look up the parcel/AIN and redirect to ProjectDataTab.
+        if (job && job.propertyAddress && (!stored || /zimas\.lacity\.org\/map\.asp\?address=/i.test(stored))) {
+          return "/assets/property-zimas?address=" + encodeURIComponent(job.propertyAddress);
+        }
+        return stored;
+      };
       const aerialSource = (job) => job.aerialAttachmentUrl || job.mapUrl || job.satellitePhotoLink || "";
       const isGenericMap = (url) => /^https:\\/\\/earth\\.google\\.com\\//i.test(String(url || ""));
       const aerialLink = (job) => !isGenericMap(aerialSource(job)) && aerialSource(job) || (job.propertyAddress ? "https://earth.google.com/web/search/" + encodeURIComponent(job.propertyAddress) : "");

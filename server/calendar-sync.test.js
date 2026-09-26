@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { calendarAirtableFields, calendarEventKey, extractAddress, findProjectMatch, isLikelyWorkEvent, jobIdForCalendarEvent, mergeCalendarAirtableFields, normalizeAddress, shouldSkipBlankAddressCreate } = require("./calendar-sync");
+const { calendarAirtableFields, calendarEventKey, extractAddress, findProjectMatch, isLikelyWorkEvent, jobIdForCalendarEvent, mergeCalendarAirtableFields, normalizeAddress, propertyCoreKey, shouldSkipBlankAddressCreate, streetAddressKey } = require("./calendar-sync");
 
 const calendar = { name: "Corrie", url: "https://caldav.example/corrie/" };
 const event = {
@@ -30,6 +30,27 @@ test("calendar sync extracts an address and matches a Gmail project", () => {
   assert.equal(project.id, "gmail-thread-1");
 });
 
+test("street keys discard location suffixes but retain explicit units", () => {
+  assert.equal(streetAddressKey("941 FORTUNE WAY LOS ANGELES CA 90042"), "941 fortune way");
+  assert.equal(streetAddressKey("941 Fortune Way, Los Angeles, CA 90042, USA"), "941 fortune way");
+  assert.equal(streetAddressKey("1200 Elm Ave, Unit H"), "1200 elm ave unit h");
+  assert.equal(propertyCoreKey("1200 Elm Ave, Unit H"), "1200 elm ave");
+});
+
+test("calendar project matching reconciles a unit omitted by the event title", () => {
+  const match = findProjectMatch({
+    uid: "calendar-unit",
+    summary: "Floor plan — 1200 Elm Ave",
+    start: new Date("2026-09-15T18:00:00.000Z")
+  }, calendar, [{
+    id: "gmail-unit",
+    propertyAddress: "1200 Elm Ave, Unit H",
+    metadata: { gmailThreadId: "thread-unit" },
+    contacts: { client: ["client@example.com"] }
+  }]);
+  assert.equal(match.id, "gmail-unit");
+});
+
 test("calendar sync skips obvious personal events", () => {
   assert.equal(isLikelyWorkEvent({ summary: "camping" }), false);
   assert.equal(isLikelyWorkEvent({ summary: "140 N Plymouth color yard ali jack" }), true);
@@ -45,7 +66,7 @@ test("calendar sync fields preserve the thread link and stable event identity", 
   assert.equal(fields["Calendar Event UID"], "event-123");
   assert.equal(fields["Calendar Sync Source"], "iCloud");
   assert.equal(fields["Gmail Thread ID"], "thread-1");
-  assert.equal(fields["Property Address"], "123 Main St, Los Angeles, CA 90065");
+  assert.equal(fields["Property Address"], "123 Main St");
 });
 
 test("calendar sync can carry an explicitly classified Gmail thread", () => {

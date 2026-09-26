@@ -18,6 +18,18 @@ test("normalizes the Gmail thread/address key deterministically", () => {
   assert.equal(gmailJobId("thread-123", "228 East Avenue 42, Los Angeles, CA 90031"), gmailJobId("thread-123", "228 East Avenue 42, Los Angeles, CA 90031"));
 });
 
+test("Gmail intake stores a street-only property address while keeping the full link query", () => {
+  const fields = gmailAirtableFields({
+    id: "message-address",
+    threadId: "thread-address",
+    propertyAddress: "941 Fortune Way, Los Angeles, CA 90042",
+    subject: "Floor plan",
+    text: "Please quote this property"
+  });
+  assert.equal(fields["Property Address"], "941 Fortune Way");
+  assert.match(fields["Google Maps Link"], /941%20Fortune%20Way%2C%20Los%20Angeles%2C%20CA%2090042/);
+});
+
 test("matches an existing record by exact Gmail thread and address", () => {
   const records = [{ id: "rec1", fields: { "Gmail Thread ID": "thread-123", "Property Address": "228 East Avenue 42, Los Angeles, CA 90031" } }];
   assert.equal(findGmailAirtableMatch(records, { threadId: "thread-123", propertyAddress: "228 East Avenue 42, Los Angeles, CA 90031" }).id, "rec1");
@@ -38,6 +50,18 @@ test("does not revive a removed project from its stored signature address", () =
 test("merges a unique calendar-first address instead of creating a duplicate", () => {
   const records = [{ id: "rec-calendar", fields: { "Property Address": "228 East Avenue 42, Los Angeles, CA 90031", "Status": "Scheduled" } }];
   assert.equal(findGmailAirtableMatch(records, { threadId: "thread-123", propertyAddress: "228 East Avenue 42, Los Angeles, CA 90031" }).id, "rec-calendar");
+});
+
+test("matches a calendar row that omitted the unit when the client email agrees", () => {
+  const records = [{ id: "rec-calendar-unit", fields: {
+    "Property Address": "1200 Elm Ave",
+    "Client Email": "jbran@teamprovident.com"
+  } }];
+  assert.equal(findGmailAirtableMatch(records, {
+    threadId: "thread-unit",
+    propertyAddress: "1200 Elm Ave, Unit H",
+    clientEmail: "jbran@teamprovident.com"
+  }).id, "rec-calendar-unit");
 });
 
 test("fills only missing business fields and always refreshes source identifiers", () => {

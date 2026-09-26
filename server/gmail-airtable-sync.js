@@ -1,5 +1,5 @@
 const crypto = require("node:crypto");
-const { normalizeAddress } = require("./calendar-sync");
+const { normalizeAddress, propertyCoreKey, streetAddressKey, streetAddressValue } = require("./calendar-sync");
 const { buildAerialFallbackLink, buildZimasAddressLink, ensurePropertyLinks } = require("./property-links");
 
 function clean(value) {
@@ -92,7 +92,7 @@ function mergedSourceChannels(record, incoming = "gmail") {
   return [...new Set([...existingSourceChannels(record), ...additions])].join(", ");
 }
 
-function findGmailAirtableMatch(records = [], { threadId, propertyAddress } = {}) {
+function findGmailAirtableMatch(records = [], { threadId, propertyAddress, clientEmail } = {}) {
   const thread = normalizeThreadId(threadId);
   const address = normalizedPropertyKey(propertyAddress);
   if (!thread || !address) return null;
@@ -103,9 +103,21 @@ function findGmailAirtableMatch(records = [], { threadId, propertyAddress } = {}
   });
   if (exact) return exact;
   // Calendar or website intake may have created the Job before Gmail arrived.
-  // A unique address match merges the sources instead of creating a duplicate.
+  // A unique street match merges the sources instead of creating a duplicate.
+  // The core-key fallback handles a calendar title that omitted a unit, but
+  // only when the contact email confirms the same person/property.
   const byAddress = records.filter((record) => normalizedPropertyKey(record && record.fields && record.fields["Property Address"]) === address);
-  return byAddress.length === 1 ? byAddress[0] : null;
+  if (byAddress.length === 1) return byAddress[0];
+
+  const streetKey = streetAddressKey(propertyAddress);
+  const byStreet = records.filter((record) => streetAddressKey(record && record.fields && record.fields["Property Address"]) === streetKey);
+  if (byStreet.length === 1) return byStreet[0];
+  const email = externalEmail(clientEmail);
+  const coreKey = propertyCoreKey(propertyAddress);
+  if (!coreKey || !email) return null;
+  const byCoreAndEmail = records.filter((record) => propertyCoreKey(record && record.fields && record.fields["Property Address"]) === coreKey
+    && externalEmail(record && record.fields && record.fields["Client Email"]) === email);
+  return byCoreAndEmail.length === 1 ? byCoreAndEmail[0] : null;
 }
 
 function findGmailAirtableThreadMatch(records = [], { threadId } = {}) {
@@ -124,10 +136,11 @@ function resolveGmailSyncAddress(message = {}, project = {}, records = []) {
 }
 
 function gmailAirtableFields(message = {}, project = {}, existing = null) {
-  const address = clean(message.propertyAddress || project.propertyAddress);
+  const linkAddress = clean(message.propertyAddress || project.propertyAddress);
+  const address = streetAddressValue(linkAddress);
   const threadId = normalizeThreadId(message.threadId || project.metadata && project.metadata.gmailThreadId);
   const messageId = clean(message.id || project.metadata && project.metadata.gmailMessageId);
-  const addressKey = normalizedPropertyKey(address);
+  const addressKey = streetAddressKey(address) || normalizedPropertyKey(address);
   const client = inferredClientContact(message);
   const agent = firstContact(message.contacts, "agent");
   const body = clean(message.text);
@@ -145,7 +158,13 @@ function gmailAirtableFields(message = {}, project = {}, existing = null) {
     "Gmail Message ID": messageId,
     "Normalized Property Key": addressKey,
     "Source Channels": mergedSourceChannels(existing, "gmail")
-  }, address);
+  }, linkAddress || address);
+  // Keep fallback assets keyed to the stored street-only address so a later
+  // property-research retry recognizes and replaces them. Maps can still use
+  // the richer source string above when it is available.
+  fields["ZIMAS Link"] = buildZimasAddressLink(address);
+  fields["Aerial Map URL"] = buildAerialFallbackLink(address);
+  fields["Satellite Photo Link"] = buildAerialFallbackLink(address);
   const parsedClientName = clean(message.clientName);
   const candidateName = contactName(client) || parsedClientName || clean(project.clientName);
   if (candidateName && !isAddressLikeClient(candidateName, address)) fields["Client Name"] = candidateName;
@@ -175,8 +194,18 @@ function patchMissingGmailFields(record, incoming) {
 function isGeneratedPropertyFallback(key, value, address) {
   const current = clean(value);
   const property = clean(address);
-  return (key === "ZIMAS Link" && current === buildZimasAddressLink(property))
-    || ((key === "Aerial Map URL" || key === "Satellite Photo Link") && current === buildAerialFallbackLink(property));
+  if (key === "ZIMAS Link" && current === buildZimasAddressLink(property)) return true;
+  if ((key === "Aerial Map URL" || key === "Satellite Photo Link") && current === buildAerialFallbackLink(property)) return true;
+  try {
+    const parsed = new URL(current);
+    const rawQueryAddress = parsed.searchParams.get("address") || parsed.pathname.split("/search/")[1] || "";
+    const queryAddress = decodeURIComponent(rawQueryAddress);
+    if (!queryAddress || streetAddressKey(queryAddress) !== streetAddressKey(property)) return false;
+    if (key === "ZIMAS Link") return parsed.hostname === "zimas.lacity.org" && /\/map\.asp$/i.test(parsed.pathname);
+    return /earth\.google\.com\/web\/search\//i.test(parsed.href);
+  } catch {
+    return false;
+  }
 }
 
 module.exports = {
@@ -186,6 +215,7 @@ module.exports = {
   gmailAirtableKey,
   gmailJobId,
   isGeneratedPropertyFallback,
+  messageContactEmail,
   normalizeThreadId,
   normalizedPropertyKey,
   patchMissingGmailFields,

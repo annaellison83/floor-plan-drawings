@@ -2,6 +2,7 @@ const AIRTABLE_API_URL = "https://api.airtable.com/v0";
 const crypto = require("crypto");
 const { researchAddress, buildUpdateFields } = require("./property-research");
 const { ensurePropertyLinks } = require("../../server/property-links");
+const { streetAddressKey, streetAddressValue } = require("../../server/calendar-sync");
 const { largeColorProjectFloor } = require("../../server/quote-pricing");
 
 const corsHeaders = {
@@ -192,6 +193,7 @@ function buildAirtableFields(data) {
   const workflow = clean(data.workflow) || (/order/i.test(request) ? "Order" : "Quick Quote");
   const status = clean(data.status) || (workflow === "Order" ? "Needs Scheduling" : "Needs Quote");
   const address = clean(data.address);
+  const propertyAddress = streetAddressValue(address) || address;
   const addressDetail = clean(data.addressDetail);
   const city = clean(data.city);
   const summary = summarizePayload(data, workflow, status);
@@ -207,7 +209,10 @@ function buildAirtableFields(data) {
     "Client Name": clean(data.name) || clean(data.email) || clean(data.phone) || "Website Lead",
     "Client Phone": clean(data.phone),
     "Client Email": clean(data.email),
-    "Property Address": city ? `${address}, ${city}` : address,
+    // Keep the street address atomic. City, state, and ZIP have their own
+    // Airtable fields; combining them here made the Master table noisy and
+    // broke source reconciliation when Gmail/calendar used the street only.
+    "Property Address": propertyAddress,
     City: city,
     State: city || address ? "CA" : "",
     "Approx Sq Ft": parseSquareFeet(data.approxSqFt),
@@ -345,6 +350,27 @@ async function createAirtableRecord(airtableUrl, token, fields) {
       // A lookup failure must not prevent the legacy fallback from attempting
       // the create; the Render path remains the primary idempotency guard.
       console.warn("Airtable idempotency lookup failed", error.message);
+    }
+  }
+  const addressKey = streetAddressKey(fields["Property Address"]);
+  const clientEmail = clean(fields["Client Email"]).toLowerCase();
+  if (addressKey && clientEmail) {
+    try {
+      const lookupUrl = new URL(airtableUrl);
+      lookupUrl.searchParams.set("maxRecords", "500");
+      const lookupResponse = await fetch(lookupUrl.href, { headers: { Authorization: `Bearer ${token}` } });
+      const lookupBody = await lookupResponse.json().catch(() => ({}));
+      const cutoff = Date.now() - 120 * 24 * 60 * 60 * 1000;
+      const existing = (lookupBody.records || []).find((record) => {
+        const recordFields = record && record.fields || {};
+        const created = Date.parse(record && record.createdTime);
+        return streetAddressKey(recordFields["Property Address"] || recordFields.Address) === addressKey
+          && clean(recordFields["Client Email"] || recordFields.Email).toLowerCase() === clientEmail
+          && (!Number.isFinite(created) || created >= cutoff);
+      });
+      if (lookupResponse.ok && existing) return { airtableBody: existing, omittedFields: [], duplicate: true };
+    } catch (error) {
+      console.warn("Airtable address/contact lookup failed", error.message);
     }
   }
   const remainingFields = { ...fields };

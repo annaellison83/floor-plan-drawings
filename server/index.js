@@ -11,12 +11,12 @@ const {
 const { buildRoster } = require("./calendar-roster");
 const { appointmentDurationMinutes, deliveryTargetForWeekday, schedulingPolicy } = require("./scheduling-policy");
 const { planAppointments } = require("./appointment-planner");
-const { calendarAirtableFields, calendarEventKey, extractAddress, findProjectMatch, isLikelyWorkEvent, mergeCalendarAirtableFields, normalizeAddress, shouldSkipBlankAddressCreate } = require("./calendar-sync");
+const { calendarAirtableFields, calendarEventKey, extractAddress, findProjectMatch, isLikelyWorkEvent, mergeCalendarAirtableFields, normalizeAddress, propertyCoreKey, shouldSkipBlankAddressCreate, streetAddressKey } = require("./calendar-sync");
 const { proposalPayload, signProposal, verifyProposal } = require("./appointment-proposals");
 const { hasFallbackSmtp, isSmtpConfigured, sendFailureAlert, sendMail, verifySmtp } = require("./mail");
 const { projectState, recipientsFor } = require("./project-state");
 const { createGmailClient, isGmailConfigured, isGmailDraftConfigured, isLikelyFloorPlanIntake, parseGmailMessage, processIntakeMessages } = require("./gmail-runtime");
-const { findGmailAirtableMatch, gmailAirtableFields, isGeneratedPropertyFallback, patchMissingGmailFields, resolveGmailSyncAddress } = require("./gmail-airtable-sync");
+const { findGmailAirtableMatch, gmailAirtableFields, isGeneratedPropertyFallback, messageContactEmail, patchMissingGmailFields, resolveGmailSyncAddress } = require("./gmail-airtable-sync");
 const { enrichGmailProperty: enrichGmailPropertyWithAssets } = require("./gmail-property-enrichment");
 const { translateClientNotes } = require("./note-translation");
 const { assetFilename, prepareEmailAssets, readAsset } = require("./image-assets");
@@ -343,8 +343,10 @@ function airtableCalendarMatch(fields, records = []) {
   const eventUid = clean(fields["Calendar Event UID"]);
   const calendarUrl = clean(fields["Calendar URL"]);
   const address = normalizeAddress(fields["Property Address"]);
+  const streetKey = streetAddressKey(fields["Property Address"]);
+  const coreKey = propertyCoreKey(fields["Property Address"]);
   const start = clean(fields["Calendar Event Start"]);
-  return records.find((record) => {
+  const exact = records.find((record) => {
     const existing = record && record.fields || {};
     if (jobId && clean(existing["Job ID"]) === jobId) return true;
     if (eventUid && clean(existing["Calendar Event UID"]) === eventUid && (!calendarUrl || clean(existing["Calendar URL"]) === calendarUrl)) return true;
@@ -353,7 +355,14 @@ function airtableCalendarMatch(fields, records = []) {
       return !start || !existingStart || new Date(existingStart).getTime() === new Date(start).getTime();
     }
     return false;
-  }) || null;
+  });
+  if (exact) return exact;
+  if (!streetKey) return null;
+  const streetMatches = records.filter((record) => streetAddressKey(record && record.fields && (record.fields["Property Address"] || record.fields.Address)) === streetKey);
+  if (streetMatches.length === 1) return streetMatches[0];
+  if (!coreKey) return null;
+  const coreMatches = records.filter((record) => propertyCoreKey(record && record.fields && (record.fields["Property Address"] || record.fields.Address)) === coreKey);
+  return coreMatches.length === 1 ? coreMatches[0] : null;
 }
 
 async function findGmailThreadMatch(event, client, cache, errors = []) {
@@ -453,7 +462,7 @@ async function syncGmailMessageToAirtable(message, project, airtableRecords = []
   const existingByThread = resolved.existing;
   const address = resolved.address;
   if (!address) return { action: "skipped", reason: "property address is missing from the message; existing project address was not used for creation" };
-  const existing = existingByThread || findGmailAirtableMatch(airtableRecords, { threadId, propertyAddress: address });
+  const existing = existingByThread || findGmailAirtableMatch(airtableRecords, { threadId, propertyAddress: address, clientEmail: messageContactEmail(message) });
   const messageWithResolvedAddress = directAddress ? message : { ...message, propertyAddress: address };
   const fields = gmailAirtableFields(messageWithResolvedAddress, project, existing);
   if (existing) {
@@ -1920,8 +1929,9 @@ async function route(req, res) {
       requestUrl.searchParams.set("address", address);
       const response = await fetch(requestUrl.href, { headers: { Accept: "application/json" } });
       const body = await response.json().catch(() => ({}));
-      const pin = clean(body && body.research && body.research.zimas
-        && body.research.zimas.parcel && body.research.zimas.parcel.pin);
+      const research = body && body.research || {};
+      const pin = clean(research.zimas && research.zimas.parcel && research.zimas.parcel.pin)
+        || (research.laCityMatch === "Matched" && clean(research.candidate && research.candidate.ain));
       if (!response.ok || !pin) return propertyAssetMessage(res, 404, "ZIMAS parcel unavailable", address);
       res.writeHead(302, {
         Location: `https://zimas.lacity.org/zimas-classic/ProjectDataTab?pin=${encodeURIComponent(pin)}`,
@@ -2158,7 +2168,22 @@ async function route(req, res) {
         return json(res, 400, { ok: false, error: "Idempotency key mismatch" });
       }
       const result = await createAirtableIntakeRecord({ fields: body.fields });
-      const intakeFields = result.record && result.record.fields ? result.record.fields : body.fields;
+      let intakeFields = result.record && result.record.fields ? { ...result.record.fields } : { ...body.fields };
+      if (result.duplicate && result.record && result.record.id) {
+        const incoming = body.fields || {};
+        const current = result.record.fields || {};
+        const patch = Object.fromEntries(Object.entries(incoming)
+          .filter(([field, value]) => value !== "" && value !== null && value !== undefined
+            && !["Job ID", "Status", "Website Workflow"].includes(field)
+            && !clean(current[field])));
+        if (Object.prototype.hasOwnProperty.call(incoming, "Source Channels")) {
+          patch["Source Channels"] = [...new Set(`${clean(current["Source Channels"])},${clean(incoming["Source Channels"])}`.split(",").map(clean).filter(Boolean))].join(", ");
+        }
+        if (Object.keys(patch).length) {
+          await updateJob(result.record.id, patch);
+          intakeFields = { ...intakeFields, ...patch };
+        }
+      }
       const project = projectState.upsertProject({
         id: result.record && result.record.id,
         source: "netlify-fpd-intake",

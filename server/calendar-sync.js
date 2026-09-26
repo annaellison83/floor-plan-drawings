@@ -1,5 +1,5 @@
 const crypto = require("node:crypto");
-const { ensurePropertyLinks } = require("./property-links");
+const { buildAerialFallbackLink, buildZimasAddressLink, ensurePropertyLinks } = require("./property-links");
 
 function clean(value) {
   return value === undefined || value === null ? "" : String(value).trim();
@@ -16,6 +16,33 @@ function normalizeText(value) {
 
 function normalizeAddress(value) {
   return normalizeText(value).replace(/\b(street|st|avenue|ave|boulevard|blvd|drive|dr|road|rd|lane|ln)\b/g, (word) => ({ street: "st", avenue: "ave", boulevard: "blvd", drive: "dr", road: "rd", lane: "ln" }[word] || word));
+}
+
+// Address matching needs a street-only key because the same property arrives
+// from the website, Gmail, and Calendar in different forms (street only,
+// city/state/ZIP appended, or a unit omitted by the calendar title). Keep the
+// unit when it is explicit so separate apartments do not collapse together.
+function streetAddressValue(value) {
+  let source = clean(value).replace(/\s+/g, " ");
+  if (!source) return "";
+  const segments = source.split(",").map(clean).filter(Boolean);
+  const unitSegment = segments.slice(1).find((segment) => /^(?:unit|suite|apt|#)\s*[A-Za-z0-9-]+$/i.test(segment));
+  if (segments.length > 1) source = segments[0] + (unitSegment ? `, ${unitSegment}` : "");
+  // Handle compact all-caps strings such as “941 FORTUNE WAY LOS ANGELES CA 90042”.
+  const compact = source.match(/^(.+?\b(?:street|st|avenue|ave|boulevard|blvd|drive|dr|road|rd|lane|ln|court|ct|place|pl|way|parkway|pkwy|circle|cir|terrace|ter|highway|hwy))\s+[A-Za-z .'-]+\s+(?:CA|California)\b.*$/i);
+  if (compact) source = compact[1];
+  source = source.replace(/\s*,?\s*(?:CA|California)\b.*$/i, "");
+  source = source.replace(/(?:,|\s)\d{5}(?:-\d{4})?\b.*$/, "");
+  source = source.replace(/\s*,?\s*(?:USA|United States)\b.*$/i, "");
+  return source.replace(/[\s,]+$/, "").trim();
+}
+
+function streetAddressKey(value) {
+  return normalizeAddress(streetAddressValue(value));
+}
+
+function propertyCoreKey(value) {
+  return streetAddressKey(value).replace(/\s+(?:unit|suite|apt|#)\s*[A-Za-z0-9-]+$/i, "").trim();
 }
 
 function looksLikeAddress(value) {
@@ -60,8 +87,10 @@ function eventStart(value) {
 function findProjectMatch(event, calendar, projects = []) {
   const uid = clean(event.uid);
   const address = normalizeAddress(extractAddress(event));
+  const streetKey = streetAddressKey(extractAddress(event));
+  const coreKey = propertyCoreKey(extractAddress(event));
   const start = eventStart(event.start);
-  return projects.find((project) => {
+  const exact = projects.find((project) => {
     const metadata = project.metadata || {};
     const stored = metadata.calendarEvent || {};
     if (uid && clean(stored.uid) === uid && clean(stored.calendarUrl) === clean(calendar.url)) return true;
@@ -70,17 +99,25 @@ function findProjectMatch(event, calendar, projects = []) {
       return !start || !appointment.start || eventStart(appointment.start) === start;
     }
     return false;
-  }) || null;
+  });
+  if (exact) return exact;
+  if (!streetKey) return null;
+  const streetMatches = projects.filter((project) => streetAddressKey(project.propertyAddress) === streetKey);
+  if (streetMatches.length === 1) return streetMatches[0];
+  if (!coreKey) return null;
+  const coreMatches = projects.filter((project) => propertyCoreKey(project.propertyAddress) === coreKey);
+  return coreMatches.length === 1 ? coreMatches[0] : null;
 }
 
 function calendarAirtableFields(calendar, event, project = null, gmailMatch = null) {
-  const address = extractAddress(event) || (project && project.propertyAddress) || "";
+  const linkAddress = extractAddress(event) || (project && project.propertyAddress) || "";
+  const address = streetAddressValue(linkAddress);
   const start = eventStart(event.start);
   const end = eventStart(event.end);
   const projectClient = project && project.contacts && project.contacts.client;
   const projectClientEmail = Array.isArray(projectClient) ? projectClient[0] : projectClient;
   const gmailClient = gmailMatch && gmailMatch.contacts && gmailMatch.contacts.client && gmailMatch.contacts.client[0];
-  return ensurePropertyLinks({
+  const fields = ensurePropertyLinks({
     "Job ID": jobIdForCalendarEvent(calendar, event),
     "Property Address": address,
     "Client Name": project && project.clientName || gmailMatch && gmailMatch.clientName || "",
@@ -97,10 +134,14 @@ function calendarAirtableFields(calendar, event, project = null, gmailMatch = nu
     "Calendar Event Location": clean(event.location),
     "Calendar Sync Source": "iCloud",
     "Gmail Thread ID": project && project.metadata && project.metadata.gmailThreadId || gmailMatch && gmailMatch.threadId || "",
-    "Normalized Property Key": normalizeAddress(address),
+    "Normalized Property Key": streetAddressKey(address),
     "Source Channels": "calendar",
     "Calendar Sync Key": calendarEventKey(calendar, event)
-  }, address);
+  }, linkAddress || address);
+  fields["ZIMAS Link"] = buildZimasAddressLink(address);
+  fields["Aerial Map URL"] = buildAerialFallbackLink(address);
+  fields["Satellite Photo Link"] = buildAerialFallbackLink(address);
+  return fields;
 }
 
 function mergeCalendarAirtableFields(existingRecord, incomingFields) {
@@ -124,4 +165,4 @@ function shouldSkipBlankAddressCreate(fields, existingRecord) {
   return !clean(fields && fields["Property Address"]) && !existingRecord;
 }
 
-module.exports = { calendarAirtableFields, calendarEventKey, extractAddress, findProjectMatch, isLikelyWorkEvent, jobIdForCalendarEvent, mergeCalendarAirtableFields, normalizeAddress, shouldSkipBlankAddressCreate };
+module.exports = { calendarAirtableFields, calendarEventKey, extractAddress, findProjectMatch, isLikelyWorkEvent, jobIdForCalendarEvent, mergeCalendarAirtableFields, normalizeAddress, propertyCoreKey, shouldSkipBlankAddressCreate, streetAddressKey, streetAddressValue };

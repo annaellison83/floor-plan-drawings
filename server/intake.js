@@ -1,4 +1,5 @@
 const crypto = require("node:crypto");
+const { streetAddressKey } = require("./calendar-sync");
 
 const AIRTABLE_API_URL = "https://api.airtable.com/v0";
 
@@ -78,12 +79,42 @@ async function findExistingByJobId({ settings, jobId }) {
   return Array.isArray(result.records) && result.records.length ? result.records[0] : null;
 }
 
+async function findExistingByAddressAndEmail({ settings, propertyAddress, clientEmail, now = Date.now(), lookbackDays = 120 }) {
+  const addressKey = streetAddressKey(propertyAddress);
+  const email = clean(clientEmail).toLowerCase();
+  if (!addressKey || !email) return null;
+  const url = new URL(`${AIRTABLE_API_URL}/${encodeURIComponent(settings.baseId)}/${encodeURIComponent(settings.table)}`);
+  url.searchParams.set("maxRecords", "500");
+  const { response, result } = await airtableFetch(url.href, { token: settings.token });
+  if (!response.ok) throw new Error(`Airtable address lookup failed with status ${response.status}`);
+  const cutoff = now - Math.max(1, Number(lookbackDays) || 120) * 24 * 60 * 60 * 1000;
+  const matches = (Array.isArray(result.records) ? result.records : []).filter((record) => {
+    const fields = record && record.fields || {};
+    const created = Date.parse(record && record.createdTime);
+    return streetAddressKey(fields["Property Address"] || fields.Address) === addressKey
+      && clean(fields["Client Email"] || fields.Email).toLowerCase() === email
+      && (!Number.isFinite(created) || created >= cutoff);
+  });
+  return matches.sort((left, right) => Date.parse(right.createdTime || 0) - Date.parse(left.createdTime || 0))[0] || null;
+}
+
 async function createAirtableIntakeRecord({ fields, env = process.env }) {
   const settings = airtableSettings(env);
   if (!settings.token || !settings.baseId) throw new Error("Airtable is not configured for Render intake");
 
   const existing = await findExistingByJobId({ settings, jobId: fields["Job ID"] });
   if (existing) return { record: existing, duplicate: true, omittedFields: [] };
+
+  // Website retries often generate a fresh Job ID even though the same client
+  // just submitted the same property. Match the stable street + client email
+  // signature within a short operational window before creating a new row.
+  const contactMatch = await findExistingByAddressAndEmail({
+    settings,
+    propertyAddress: fields["Property Address"],
+    clientEmail: fields["Client Email"],
+    lookbackDays: env.DUPLICATE_LOOKBACK_DAYS || 120
+  });
+  if (contactMatch) return { record: contactMatch, duplicate: true, omittedFields: [] };
 
   const url = `${AIRTABLE_API_URL}/${encodeURIComponent(settings.baseId)}/${encodeURIComponent(settings.table)}`;
   const remainingFields = { ...fields };
@@ -113,6 +144,7 @@ module.exports = {
   bearerToken,
   constantTimeEqual,
   createAirtableIntakeRecord,
+  findExistingByAddressAndEmail,
   findExistingByJobId,
   intakeAuthorized,
   validateIntakeEnvelope

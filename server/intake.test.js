@@ -62,3 +62,40 @@ test("Render intake creates once and returns the existing record on retry", asyn
     global.fetch = originalFetch;
   }
 });
+
+test("Render intake matches a fresh website job ID to a recent address and client", async () => {
+  const originalFetch = global.fetch;
+  const calls = [];
+  let records = [];
+  global.fetch = async (url, options = {}) => {
+    calls.push({ url, options });
+    if (options.method === "GET") {
+      return new Response(JSON.stringify({ records }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    const body = JSON.parse(options.body);
+    const record = { id: "recIntakeMatch", createdTime: new Date().toISOString(), fields: body.fields };
+    records = [record];
+    return new Response(JSON.stringify(record), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  try {
+    const options = { AIRTABLE_TOKEN: "pat-test", AIRTABLE_BASE_ID: "app-test", AIRTABLE_JOBS_TABLE: "Jobs" };
+    const first = await createAirtableIntakeRecord({ fields: {
+      "Job ID": "WEB-first",
+      "Property Address": "941 Fortune Way, Los Angeles, CA 90042",
+      "Client Email": "lisa@example.com",
+      Status: "Needs Quote"
+    }, env: options });
+    const second = await createAirtableIntakeRecord({ fields: {
+      "Job ID": "WEB-second",
+      "Property Address": "941 FORTUNE WAY LOS ANGELES CA 90042",
+      "Client Email": "lisa@example.com",
+      Status: "Needs Quote"
+    }, env: options });
+    assert.equal(first.duplicate, false);
+    assert.equal(second.duplicate, true);
+    assert.equal(second.record.id, "recIntakeMatch");
+    assert.equal(calls.filter((call) => call.options.method === "POST").length, 1);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
