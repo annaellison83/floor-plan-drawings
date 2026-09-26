@@ -11,12 +11,12 @@ const {
 const { buildRoster } = require("./calendar-roster");
 const { appointmentDurationMinutes, deliveryTargetForWeekday, schedulingPolicy } = require("./scheduling-policy");
 const { planAppointments } = require("./appointment-planner");
-const { calendarAirtableFields, calendarEventKey, extractAddress, findProjectMatch, isLikelyWorkEvent, mergeCalendarAirtableFields, normalizeAddress, propertyCoreKey, shouldSkipBlankAddressCreate, streetAddressKey } = require("./calendar-sync");
+const { calendarAirtableFields, calendarEventKey, directionlessStreetKey, extractAddress, findProjectMatch, isLikelyWorkEvent, mergeCalendarAirtableFields, normalizeAddress, propertyCoreKey, shouldSkipBlankAddressCreate, streetAddressKey } = require("./calendar-sync");
 const { proposalPayload, signProposal, verifyProposal } = require("./appointment-proposals");
 const { hasFallbackSmtp, isSmtpConfigured, sendFailureAlert, sendMail, verifySmtp } = require("./mail");
 const { projectState, recipientsFor } = require("./project-state");
-const { createGmailClient, isGmailConfigured, isGmailDraftConfigured, isLikelyFloorPlanIntake, parseGmailMessage, processIntakeMessages } = require("./gmail-runtime");
-const { findGmailAirtableMatch, gmailAirtableFields, isGeneratedPropertyFallback, messageContactEmail, patchMissingGmailFields, resolveGmailSyncAddress } = require("./gmail-airtable-sync");
+const { createGmailClient, isGmailConfigured, isGmailDraftConfigured, isLikelyFloorPlanIntake, isWeTransferPaymentConfirmation, parseGmailMessage, processIntakeMessages } = require("./gmail-runtime");
+const { deliveryFieldsForMessage, findGmailAirtableMatch, findPaymentAirtableMatch, gmailAirtableFields, isGeneratedPropertyFallback, messageContactEmail, patchMissingGmailFields, paymentFieldsForMessage, resolveGmailSyncAddress, weTransferLinks } = require("./gmail-airtable-sync");
 const { enrichGmailProperty: enrichGmailPropertyWithAssets } = require("./gmail-property-enrichment");
 const { translateClientNotes } = require("./note-translation");
 const { assetFilename, prepareEmailAssets, readAsset } = require("./image-assets");
@@ -360,6 +360,11 @@ function airtableCalendarMatch(fields, records = []) {
   if (!streetKey) return null;
   const streetMatches = records.filter((record) => streetAddressKey(record && record.fields && (record.fields["Property Address"] || record.fields.Address)) === streetKey);
   if (streetMatches.length === 1) return streetMatches[0];
+  const directionlessKey = directionlessStreetKey(fields["Property Address"]);
+  const directionlessMatches = directionlessKey
+    ? records.filter((record) => directionlessStreetKey(record && record.fields && (record.fields["Property Address"] || record.fields.Address)) === directionlessKey)
+    : [];
+  if (directionlessMatches.length === 1) return directionlessMatches[0];
   if (!coreKey) return null;
   const coreMatches = records.filter((record) => propertyCoreKey(record && record.fields && (record.fields["Property Address"] || record.fields.Address)) === coreKey);
   return coreMatches.length === 1 ? coreMatches[0] : null;
@@ -482,6 +487,69 @@ async function syncGmailMessageToAirtable(message, project, airtableRecords = []
   }
   const enrichment = record.id ? await enrichGmailProperty(record.id, { ...fields, ...(record.fields || {}) }) : { ok: false, skipped: true, reason: "record id is missing" };
   return { action: "created", recordId: record.id || "", enrichment, key: fields["Normalized Property Key"], omittedFields: created.omittedFields || [] };
+}
+
+async function pollGmailDeliveryLinks(client, airtableRecords = []) {
+  if (!gmailAirtableSyncEnabled()) return { enabled: false, matched: [], unmatched: [], skipped: [] };
+  const listed = await client.listMessages({ labelId: "", query: client.config.deliveryQuery, maxResults: client.config.deliveryMaxResults });
+  const matched = [], unmatched = [], skipped = [];
+  for (const item of listed.messages || []) {
+    const messageId = clean(item && item.id);
+    if (!messageId) continue;
+    const key = `gmail-delivery:${messageId}`;
+    if (await projectState.hasProcessedMessage(key)) { skipped.push(messageId); continue; }
+    try {
+      const parsed = parseGmailMessage(await client.getMessage(messageId), { agentEmails: client.config.agentEmails, clientEmails: client.config.clientEmails });
+      const links = weTransferLinks(parsed);
+      if (!links.length) { await projectState.markProcessedMessage(key); skipped.push(messageId); continue; }
+      const existing = findGmailAirtableMatch(airtableRecords, { threadId: parsed.threadId, propertyAddress: parsed.propertyAddress, clientEmail: messageContactEmail(parsed) });
+      if (!existing) { unmatched.push({ messageId, threadId: parsed.threadId, propertyAddress: parsed.propertyAddress, links }); continue; }
+      const patch = patchMissingGmailFields(existing, { ...deliveryFieldsForMessage(parsed), "Source Channels": "gmail" });
+      if (Object.keys(patch).length) {
+        await updateJob(existing.id, patch);
+        existing.fields = { ...(existing.fields || {}), ...patch };
+      }
+      await projectState.markProcessedMessage(key);
+      matched.push({ messageId, threadId: parsed.threadId, recordId: existing.id, deliveryLink: links[0] });
+    } catch (error) {
+      unmatched.push({ messageId, error: error.message });
+    }
+  }
+  return { enabled: true, matched, unmatched, skipped, nextPageToken: listed.nextPageToken || "" };
+}
+
+async function pollGmailPaymentConfirmations(client, airtableRecords = []) {
+  if (!gmailAirtableSyncEnabled()) return { enabled: false, matched: [], unmatched: [], skipped: [] };
+  const listed = await client.listMessages({ labelId: "", query: client.config.paymentQuery, maxResults: client.config.paymentMaxResults });
+  const matched = [], unmatched = [], skipped = [];
+  for (const item of listed.messages || []) {
+    const messageId = clean(item && item.id);
+    if (!messageId) continue;
+    const key = `gmail-payment:${messageId}`;
+    if (await projectState.hasProcessedMessage(key)) { skipped.push(messageId); continue; }
+    try {
+      const parsed = parseGmailMessage(await client.getMessage(messageId), { agentEmails: client.config.agentEmails, clientEmails: client.config.clientEmails });
+      if (!isWeTransferPaymentConfirmation(parsed)) { await projectState.markProcessedMessage(key); skipped.push(messageId); continue; }
+      const existing = findPaymentAirtableMatch(airtableRecords, parsed);
+      if (!existing) { unmatched.push({ messageId, threadId: parsed.threadId, propertyAddress: parsed.propertyAddress, subject: parsed.subject }); continue; }
+      const patch = patchMissingGmailFields(existing, { ...paymentFieldsForMessage(parsed), "Source Channels": "gmail" });
+      if (Object.keys(patch).length) {
+        await updateJob(existing.id, patch);
+        existing.fields = { ...(existing.fields || {}), ...patch };
+      }
+      await createInboundCommunicationLog({
+        recordId: existing.id,
+        subject: parsed.subject,
+        communication: communicationKey(existing.id, "payment_confirmed", messageId),
+        summary: "WeTransfer reported that the delivery was downloaded/accepted; payment marked Paid automatically."
+      });
+      await projectState.markProcessedMessage(key);
+      matched.push({ messageId, threadId: parsed.threadId, recordId: existing.id, paymentStatus: "Paid" });
+    } catch (error) {
+      unmatched.push({ messageId, error: error.message });
+    }
+  }
+  return { enabled: true, matched, unmatched, skipped, nextPageToken: listed.nextPageToken || "" };
 }
 
 async function enrichGmailProperty(recordId, fields = {}) {
@@ -838,6 +906,11 @@ async function pollGmailIntake() {
     },
     options: { agentEmails: client.config.agentEmails, clientEmails: client.config.clientEmails }
   });
+  // Reconcile completed delivery notifications separately from intake mail.
+  // The outgoing-link pass runs first so a WeTransfer acceptance can match a
+  // job by the transfer token even when the notification has no address.
+  const deliverySync = await pollGmailDeliveryLinks(client, airtableRecords);
+  const paymentSync = await pollGmailPaymentConfirmations(client, airtableRecords);
   // Re-enrich previously ingested Gmail projects after parser/config changes.
   // This is read-only against Gmail and only updates missing structured fields.
   const configuredAgents = new Set(client.config.agentEmails);
@@ -881,7 +954,7 @@ async function pollGmailIntake() {
   const airtableMatched = airtableSync.filter((item) => item.action === "matched").length;
   const airtableErrors = airtableSync.filter((item) => item.action === "error").length;
   console.log(`GMAIL intake: ${processed.length} processed, ${airtableCreated} Airtable created, ${airtableMatched} matched, ${airtableErrors} sync errors`);
-  return { ok: true, autoLabel, processed, skipped: result.skipped, airtableSync, nextPageToken: result.nextPageToken };
+  return { ok: true, autoLabel, processed, skipped: result.skipped, airtableSync, deliverySync, paymentSync, nextPageToken: result.nextPageToken };
 }
 
 function holdId({ jobKey, worker, start }) {

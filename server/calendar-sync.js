@@ -15,7 +15,11 @@ function normalizeText(value) {
 }
 
 function normalizeAddress(value) {
-  return normalizeText(value).replace(/\b(street|st|avenue|ave|boulevard|blvd|drive|dr|road|rd|lane|ln)\b/g, (word) => ({ street: "st", avenue: "ave", boulevard: "blvd", drive: "dr", road: "rd", lane: "ln" }[word] || word));
+  return normalizeText(value)
+    .replace(/\b(north|n|south|s|east|e|west|w)\b/g, (word) => ({ north: "n", south: "s", east: "e", west: "w" }[word] || word))
+    .replace(/\b(street|st|avenue|ave|boulevard|blvd|drive|dr|road|rd|lane|ln|court|ct|place|pl|parkway|pkwy|circle|cir|terrace|ter|highway|hwy)\b/g, (word) => ({
+      street: "st", avenue: "ave", boulevard: "blvd", drive: "dr", road: "rd", lane: "ln", court: "ct", place: "pl", parkway: "pkwy", circle: "cir", terrace: "ter", highway: "hwy"
+    }[word] || word));
 }
 
 // Address matching needs a street-only key because the same property arrives
@@ -39,6 +43,10 @@ function streetAddressValue(value) {
 
 function streetAddressKey(value) {
   return normalizeAddress(streetAddressValue(value));
+}
+
+function directionlessStreetKey(value) {
+  return streetAddressKey(value).replace(/^(\d+)\s+[nesw]\s+/, "$1 ").trim();
 }
 
 function propertyCoreKey(value) {
@@ -104,6 +112,11 @@ function findProjectMatch(event, calendar, projects = []) {
   if (!streetKey) return null;
   const streetMatches = projects.filter((project) => streetAddressKey(project.propertyAddress) === streetKey);
   if (streetMatches.length === 1) return streetMatches[0];
+  const directionlessKey = directionlessStreetKey(extractAddress(event));
+  const directionlessMatches = directionlessKey
+    ? projects.filter((project) => directionlessStreetKey(project.propertyAddress) === directionlessKey)
+    : [];
+  if (directionlessMatches.length === 1) return directionlessMatches[0];
   if (!coreKey) return null;
   const coreMatches = projects.filter((project) => propertyCoreKey(project.propertyAddress) === coreKey);
   return coreMatches.length === 1 ? coreMatches[0] : null;
@@ -165,4 +178,4 @@ function shouldSkipBlankAddressCreate(fields, existingRecord) {
   return !clean(fields && fields["Property Address"]) && !existingRecord;
 }
 
-module.exports = { calendarAirtableFields, calendarEventKey, extractAddress, findProjectMatch, isLikelyWorkEvent, jobIdForCalendarEvent, mergeCalendarAirtableFields, normalizeAddress, propertyCoreKey, shouldSkipBlankAddressCreate, streetAddressKey, streetAddressValue };
+module.exports = { calendarAirtableFields, calendarEventKey, directionlessStreetKey, extractAddress, findProjectMatch, isLikelyWorkEvent, jobIdForCalendarEvent, mergeCalendarAirtableFields, normalizeAddress, propertyCoreKey, shouldSkipBlankAddressCreate, streetAddressKey, streetAddressValue };

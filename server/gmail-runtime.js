@@ -12,6 +12,10 @@ function gmailConfig(env = process.env) {
     autoLabelEnabled: clean(env.ENABLE_GMAIL_AUTO_LABEL).toLowerCase() === "true",
     autoLabelQuery: clean(env.GMAIL_AUTO_LABEL_QUERY),
     autoLabelMaxResults: Math.max(1, Math.min(100, Number(env.GMAIL_AUTO_LABEL_MAX_RESULTS) || 10)),
+    paymentQuery: clean(env.GMAIL_PAYMENT_QUERY) || "{from:(wetransfer.com) from:(wetransfer.net) subject:(WeTransfer)} newer_than:730d",
+    paymentMaxResults: Math.max(1, Math.min(100, Number(env.GMAIL_PAYMENT_MAX_RESULTS) || 50)),
+    deliveryQuery: clean(env.GMAIL_DELIVERY_QUERY) || "from:me (wetransfer OR we.tl) newer_than:730d",
+    deliveryMaxResults: Math.max(1, Math.min(100, Number(env.GMAIL_DELIVERY_MAX_RESULTS) || 50)),
     maxResults: Math.max(1, Math.min(100, Number(env.GMAIL_INTAKE_MAX_RESULTS) || 25)),
     agentEmails: list(env.GMAIL_AGENT_EMAILS), clientEmails: list(env.GMAIL_CLIENT_EMAILS)
   };
@@ -225,6 +229,20 @@ function isLikelyFloorPlanIntake(message = {}) {
   return hasMarker && (hasAddress || websiteMarker || /new\s+request|quick\s+quote|site\s+map/i.test(subject));
 }
 
+// WeTransfer sends a separate notification when a recipient downloads a
+// transfer. Treat that as a payment signal only when the provider and the
+// completed/downloaded language are both present; expiry, cancellation, and
+// failure notices must never mark a job paid.
+function isWeTransferPaymentConfirmation(message = {}) {
+  const subject = clean(message.subject);
+  const text = clean(message.text || message.snippet);
+  const sourceEmail = clean(message.contacts && message.contacts.source && message.contacts.source.email);
+  const searchable = `${subject}\n${text}`;
+  if (!/wetransfer(?:\.com|\.net)|we\.tl/i.test(sourceEmail) && !/wetransfer/i.test(subject)) return false;
+  if (!/(?:downloaded|has been downloaded|was downloaded|accepted|received|completed|picked\s+up)/i.test(searchable)) return false;
+  return !/(?:expired|deleted|cancelled|canceled|failed|couldn['’]?t|could not)/i.test(searchable);
+}
+
 async function jsonFetch(fetchImpl, url, options = {}) {
   const response = await fetchImpl(url, options);
   const body = await response.json().catch(() => ({}));
@@ -288,4 +306,4 @@ async function processIntakeMessages({ client, onMessage, store = createMemoryId
   return { processed, skipped, nextPageToken: listed.nextPageToken || "" };
 }
 
-module.exports = { addressParts, classifyContacts, collectAttachmentNames, createGmailClient, createMemoryIdempotencyStore, extractClientName, extractPropertyAddress, gmailConfig, isGmailConfigured, isGmailDraftConfigured, isLikelyFloorPlanIntake, parseGmailMessage, processIntakeMessages, resolveIntakeContacts };
+module.exports = { addressParts, classifyContacts, collectAttachmentNames, createGmailClient, createMemoryIdempotencyStore, extractClientName, extractPropertyAddress, gmailConfig, isGmailConfigured, isGmailDraftConfigured, isLikelyFloorPlanIntake, isWeTransferPaymentConfirmation, parseGmailMessage, processIntakeMessages, resolveIntakeContacts };

@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { calendarAirtableFields, calendarEventKey, extractAddress, findProjectMatch, isLikelyWorkEvent, jobIdForCalendarEvent, mergeCalendarAirtableFields, normalizeAddress, propertyCoreKey, shouldSkipBlankAddressCreate, streetAddressKey } = require("./calendar-sync");
+const { calendarAirtableFields, calendarEventKey, directionlessStreetKey, extractAddress, findProjectMatch, isLikelyWorkEvent, jobIdForCalendarEvent, mergeCalendarAirtableFields, normalizeAddress, propertyCoreKey, shouldSkipBlankAddressCreate, streetAddressKey } = require("./calendar-sync");
 
 const calendar = { name: "Corrie", url: "https://caldav.example/corrie/" };
 const event = {
@@ -34,6 +34,9 @@ test("street keys discard location suffixes but retain explicit units", () => {
   assert.equal(streetAddressKey("941 FORTUNE WAY LOS ANGELES CA 90042"), "941 fortune way");
   assert.equal(streetAddressKey("941 Fortune Way, Los Angeles, CA 90042, USA"), "941 fortune way");
   assert.equal(streetAddressKey("1200 Elm Ave, Unit H"), "1200 elm ave unit h");
+  assert.equal(streetAddressKey("2429 East Glenoaks Boulevard"), "2429 e glenoaks blvd");
+  assert.equal(streetAddressKey("26611 Marigold Court"), "26611 marigold ct");
+  assert.equal(directionlessStreetKey("8460 W Kirkwood Dr"), directionlessStreetKey("8460 Kirkwood Dr"));
   assert.equal(propertyCoreKey("1200 Elm Ave, Unit H"), "1200 elm ave");
 });
 

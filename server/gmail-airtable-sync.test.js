@@ -3,18 +3,21 @@ const assert = require("node:assert/strict");
 const {
   findGmailAirtableMatch,
   findGmailAirtableThreadMatch,
+  findPaymentAirtableMatch,
   gmailAirtableKey,
   gmailJobId,
   gmailAirtableFields,
   isGeneratedPropertyFallback,
   normalizedPropertyKey,
+  paymentFieldsForMessage,
   patchMissingGmailFields,
-  resolveGmailSyncAddress
+  resolveGmailSyncAddress,
+  weTransferLinks
 } = require("./gmail-airtable-sync");
 
 test("normalizes the Gmail thread/address key deterministically", () => {
-  assert.equal(normalizedPropertyKey("228 East Avenue 42, Los Angeles, CA 90031"), "228 east ave 42 los angeles ca 90031");
-  assert.equal(gmailAirtableKey("thread-123", "228 East Avenue 42, Los Angeles, CA 90031"), "thread-123::228 east ave 42 los angeles ca 90031");
+  assert.equal(normalizedPropertyKey("228 East Avenue 42, Los Angeles, CA 90031"), "228 e ave 42 los angeles ca 90031");
+  assert.equal(gmailAirtableKey("thread-123", "228 East Avenue 42, Los Angeles, CA 90031"), "thread-123::228 e ave 42 los angeles ca 90031");
   assert.equal(gmailJobId("thread-123", "228 East Avenue 42, Los Angeles, CA 90031"), gmailJobId("thread-123", "228 East Avenue 42, Los Angeles, CA 90031"));
 });
 
@@ -109,4 +112,21 @@ test("recognizes generated Gmail property fallbacks as replaceable asset placeho
   assert.equal(isGeneratedPropertyFallback("ZIMAS Link", fields["ZIMAS Link"], address), true);
   assert.equal(isGeneratedPropertyFallback("Aerial Map URL", fields["Aerial Map URL"], address), true);
   assert.equal(isGeneratedPropertyFallback("Aerial Map URL", "https://v5.airtableusercontent.com/real.jpg", address), false);
+});
+
+test("captures a WeTransfer delivery link and marks payment from its acceptance", () => {
+  const delivery = { threadId: "thread-delivery", propertyAddress: "941 Fortune Way", subject: "Floor plan delivered", text: "Download your files: https://we.tl/t-abc123456789" };
+  assert.deepEqual(weTransferLinks(delivery), ["https://we.tl/t-abc123456789"]);
+  const records = [{ id: "rec-job", fields: { "Property Address": "941 Fortune Way", "Delivery Link": "https://we.tl/t-abc123456789", "Gmail Thread ID": "thread-intake" } }];
+  const payment = { threadId: "thread-transfer", propertyAddress: "", contacts: { source: { email: "notifications@wetransfer.com" } }, subject: "Your transfer has been downloaded", text: "Your transfer https://we.tl/t-abc123456789 was downloaded.", date: "Sat, 26 Sep 2026 09:00:00 -0700" };
+  assert.equal(findPaymentAirtableMatch(records, payment).id, "rec-job");
+  assert.deepEqual(paymentFieldsForMessage(payment), {
+    "Payment Status": "Paid",
+    "Invoice Status": "Paid",
+    "Payment Evidence URL": "https://mail.google.com/mail/u/0/#all/thread-transfer",
+    "Payment Confirmed At": "2026-09-26T16:00:00.000Z"
+  });
+  const patch = patchMissingGmailFields({ id: "rec-job", fields: { "Payment Status": "Unpaid" } }, paymentFieldsForMessage(payment));
+  assert.equal(patch["Payment Status"], "Paid");
+  assert.equal(patch["Invoice Status"], "Paid");
 });

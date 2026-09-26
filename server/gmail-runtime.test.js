@@ -1,11 +1,12 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { addressParts, classifyContacts, createGmailClient, extractClientName, extractPropertyAddress, gmailConfig, isLikelyFloorPlanIntake, parseGmailMessage, processIntakeMessages, resolveIntakeContacts } = require("./gmail-runtime");
+const { addressParts, classifyContacts, createGmailClient, extractClientName, extractPropertyAddress, gmailConfig, isLikelyFloorPlanIntake, isWeTransferPaymentConfirmation, parseGmailMessage, processIntakeMessages, resolveIntakeContacts } = require("./gmail-runtime");
 
 test("gmailConfig reads OAuth and intake settings", () => {
   const config = gmailConfig({ GMAIL_CLIENT_ID: "id", GMAIL_CLIENT_SECRET: "secret", GMAIL_REFRESH_TOKEN: "refresh", GMAIL_INTAKE_LABEL_ID: "Label_29", ENABLE_GMAIL_AUTO_LABEL: "true", GMAIL_AUTO_LABEL_QUERY: "floor plan", GMAIL_AGENT_EMAILS: "anna@example.com, worker@example.com" });
   assert.equal(config.clientId, "id"); assert.equal(config.intakeLabelId, "Label_29");
   assert.equal(config.autoLabelEnabled, true); assert.equal(config.autoLabelQuery, "floor plan");
+  assert.match(config.paymentQuery, /wetransfer/i); assert.match(config.deliveryQuery, /wetransfer/i);
   assert.deepEqual(config.agentEmails, ["anna@example.com", "worker@example.com"]);
 });
 
@@ -100,6 +101,13 @@ test("FPD auto-label heuristic requires a marker plus an address and rejects unr
 
 test("Gmail intake ignores outgoing floor plan quote drafts", () => {
   assert.equal(isLikelyFloorPlanIntake({ subject: "Floor plan quote for 4968 Vincent Ave", text: "Quote: $345", propertyAddress: "4968 Vincent Ave" }), false);
+});
+
+test("WeTransfer acceptance is a payment signal, but expiry is not", () => {
+  const base = { contacts: { source: { email: "notifications@wetransfer.com" } } };
+  assert.equal(isWeTransferPaymentConfirmation({ ...base, subject: "Your transfer has been downloaded", text: "Good news — your transfer was downloaded." }), true);
+  assert.equal(isWeTransferPaymentConfirmation({ ...base, subject: "Your transfer has expired", text: "The transfer was not downloaded." }), false);
+  assert.equal(isWeTransferPaymentConfirmation({ contacts: { source: { email: "client@example.com" } }, subject: "Your transfer has been downloaded", text: "WeTransfer" }), false);
 });
 
 test("parseGmailMessage collects attachment names for intake heuristics", () => {

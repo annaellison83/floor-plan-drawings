@@ -1,6 +1,7 @@
 const crypto = require("node:crypto");
-const { normalizeAddress, propertyCoreKey, streetAddressKey, streetAddressValue } = require("./calendar-sync");
+const { directionlessStreetKey, normalizeAddress, propertyCoreKey, streetAddressKey, streetAddressValue } = require("./calendar-sync");
 const { buildAerialFallbackLink, buildZimasAddressLink, ensurePropertyLinks } = require("./property-links");
+const { isWeTransferPaymentConfirmation } = require("./gmail-runtime");
 
 function clean(value) {
   return value === undefined || value === null ? "" : String(value).trim();
@@ -71,6 +72,43 @@ function messageContactPhone(message = {}) {
   return matches.length ? matches[0] : "";
 }
 
+function weTransferLinks(message = {}) {
+  return [...`${clean(message.subject)}\n${clean(message.text)}`.matchAll(/https?:\/\/(?:www\.)?(?:wetransfer\.com|we\.tl)[^\s<>"')]+/gi)]
+    .map((match) => match[0].replace(/[),.;]+$/, ""))
+    .filter((url, index, values) => values.indexOf(url) === index);
+}
+
+function transferTokens(urls = []) {
+  return urls.flatMap((url) => {
+    try {
+      const parsed = new URL(url);
+      return parsed.pathname.split("/").map(clean).filter((part) => part.length >= 8);
+    } catch {
+      return [];
+    }
+  });
+}
+
+function paymentFieldsForMessage(message = {}) {
+  if (!isWeTransferPaymentConfirmation(message)) return {};
+  const timestamp = Date.parse(message.date || message.internalDate || "");
+  const confirmedAt = Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : new Date().toISOString();
+  const evidence = clean(message.threadId)
+    ? `https://mail.google.com/mail/u/0/#all/${encodeURIComponent(message.threadId)}`
+    : weTransferLinks(message)[0] || "";
+  return {
+    "Payment Status": "Paid",
+    "Invoice Status": "Paid",
+    "Payment Evidence URL": evidence,
+    "Payment Confirmed At": confirmedAt
+  };
+}
+
+function deliveryFieldsForMessage(message = {}) {
+  const link = weTransferLinks(message)[0] || "";
+  return link ? { "Delivery Link": link } : {};
+}
+
 function isAddressLikeClient(value, address = "") {
   const current = clean(value);
   const property = clean(address);
@@ -95,8 +133,8 @@ function mergedSourceChannels(record, incoming = "gmail") {
 function findGmailAirtableMatch(records = [], { threadId, propertyAddress, clientEmail } = {}) {
   const thread = normalizeThreadId(threadId);
   const address = normalizedPropertyKey(propertyAddress);
-  if (!thread || !address) return null;
-  const exact = records.find((record) => {
+  if (!address) return null;
+  const exact = thread && records.find((record) => {
     const fields = record && record.fields || {};
     return normalizeThreadId(fields["Gmail Thread ID"]) === thread
       && normalizedPropertyKey(fields["Property Address"]) === address;
@@ -112,12 +150,34 @@ function findGmailAirtableMatch(records = [], { threadId, propertyAddress, clien
   const streetKey = streetAddressKey(propertyAddress);
   const byStreet = records.filter((record) => streetAddressKey(record && record.fields && record.fields["Property Address"]) === streetKey);
   if (byStreet.length === 1) return byStreet[0];
+  const directionlessKey = directionlessStreetKey(propertyAddress);
+  const byDirectionlessStreet = directionlessKey
+    ? records.filter((record) => directionlessStreetKey(record && record.fields && record.fields["Property Address"]) === directionlessKey)
+    : [];
+  if (byDirectionlessStreet.length === 1) return byDirectionlessStreet[0];
   const email = externalEmail(clientEmail);
   const coreKey = propertyCoreKey(propertyAddress);
   if (!coreKey || !email) return null;
   const byCoreAndEmail = records.filter((record) => propertyCoreKey(record && record.fields && record.fields["Property Address"]) === coreKey
     && externalEmail(record && record.fields && record.fields["Client Email"]) === email);
   return byCoreAndEmail.length === 1 ? byCoreAndEmail[0] : null;
+}
+
+function findPaymentAirtableMatch(records = [], message = {}) {
+  const thread = normalizeThreadId(message.threadId);
+  if (thread) {
+    const threadMatches = records.filter((record) => normalizeThreadId(record && record.fields && record.fields["Gmail Thread ID"]) === thread);
+    if (threadMatches.length === 1) return threadMatches[0];
+  }
+  const addressKey = streetAddressKey(message.propertyAddress);
+  if (addressKey) {
+    const addressMatches = records.filter((record) => streetAddressKey(record && record.fields && record.fields["Property Address"]) === addressKey);
+    if (addressMatches.length === 1) return addressMatches[0];
+  }
+  const tokens = transferTokens(weTransferLinks(message));
+  if (!tokens.length) return null;
+  const tokenMatches = records.filter((record) => tokens.some((token) => JSON.stringify(record && record.fields || {}).includes(token)));
+  return tokenMatches.length === 1 ? tokenMatches[0] : null;
 }
 
 function findGmailAirtableThreadMatch(records = [], { threadId } = {}) {
@@ -165,6 +225,7 @@ function gmailAirtableFields(message = {}, project = {}, existing = null) {
   fields["ZIMAS Link"] = buildZimasAddressLink(address);
   fields["Aerial Map URL"] = buildAerialFallbackLink(address);
   fields["Satellite Photo Link"] = buildAerialFallbackLink(address);
+  Object.assign(fields, deliveryFieldsForMessage(message), paymentFieldsForMessage(message));
   const parsedClientName = clean(message.clientName);
   const candidateName = contactName(client) || parsedClientName || clean(project.clientName);
   if (candidateName && !isAddressLikeClient(candidateName, address)) fields["Client Name"] = candidateName;
@@ -181,6 +242,15 @@ function patchMissingGmailFields(record, incoming) {
   const patch = {};
   for (const [key, value] of Object.entries(incoming || {})) {
     if (!clean(value)) continue;
+    if (["Payment Status", "Invoice Status", "Payment Evidence URL", "Payment Confirmed At"].includes(key)
+      && (incoming["Payment Status"] === "Paid" || key === "Payment Evidence URL" || key === "Payment Confirmed At")) {
+      patch[key] = value;
+      continue;
+    }
+    if (key === "Delivery Link") {
+      if (!clean(existing[key])) patch[key] = value;
+      continue;
+    }
     if (key === "Status" || key === "Website Workflow" || key === "Job ID") continue;
     if (["Gmail Thread ID", "Gmail Message ID", "Normalized Property Key", "Source Channels"].includes(key)) {
       patch[key] = key === "Source Channels" ? mergedSourceChannels(record, value) : value;
@@ -209,13 +279,17 @@ function isGeneratedPropertyFallback(key, value, address) {
 }
 
 module.exports = {
+  deliveryFieldsForMessage,
   findGmailAirtableMatch,
   findGmailAirtableThreadMatch,
+  findPaymentAirtableMatch,
   gmailAirtableFields,
   gmailAirtableKey,
   gmailJobId,
   isGeneratedPropertyFallback,
   messageContactEmail,
+  paymentFieldsForMessage,
+  weTransferLinks,
   normalizeThreadId,
   normalizedPropertyKey,
   patchMissingGmailFields,

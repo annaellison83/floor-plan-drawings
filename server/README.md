@@ -251,6 +251,35 @@ to Anna and records it in Communication Log. It never sends client-facing mail
 until the role is explicit. Set `ENABLE_GMAIL_ROLE_CLARIFICATION=false` to
 pause those notices without disabling intake.
 
+### Delivery and payment reconciliation
+
+The Gmail poll also runs two narrow reconciliation searches when
+`ENABLE_GMAIL_AIRTABLE_SYNC=true`:
+
+- `GMAIL_DELIVERY_QUERY` (default: `from:me (wetransfer OR we.tl) newer_than:730d`)
+  captures the first WeTransfer link sent for a matched job in the Jobs field
+  `Delivery Link`. That is the durable “floor plan sent” signal.
+- `GMAIL_PAYMENT_QUERY` (default: WeTransfer sender/subject notifications from
+  the last 730 days) recognizes a provider notification that a transfer was
+  downloaded or accepted. It sets `Payment Status` and `Invoice Status` to
+  `Paid`, records `Payment Confirmed At`, stores a Gmail `Payment Evidence URL`,
+  and adds a Communication Log event.
+
+The payment detector rejects expiry, cancellation, and failure messages. It
+matches by Gmail thread, normalized property key, or the WeTransfer token saved
+in `Delivery Link`. An unmatched notification remains retryable and is returned
+in the poll result for review; it never creates a new job or guesses which job
+was paid. Override the searches or caps with `GMAIL_DELIVERY_QUERY`,
+`GMAIL_DELIVERY_MAX_RESULTS`, `GMAIL_PAYMENT_QUERY`, and
+`GMAIL_PAYMENT_MAX_RESULTS`.
+
+This is the workflow contract going forward: website, Gmail, Calendar, and
+future phone/SMS events all resolve to one Jobs record, and each channel only
+adds evidence to the fields it owns. A future phone integration should write
+through the same address/contact matcher and append a Communication Log row;
+it should not create a parallel job table or infer payment from an unverified
+conversation.
+
 Set `ENABLE_GMAIL_INTAKE_NOTIFICATIONS=true` only after reviewing one manual
 poll. For each labeled message with an extracted property address, Render then
 sends Anna an internal-only `QUOTE REQUEST | [address]` email using the same responsive quote
