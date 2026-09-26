@@ -517,18 +517,36 @@ async function applyGmailIntakeLabel(client, match) {
 }
 
 const DEFAULT_GMAIL_AUTO_LABEL_QUERY = 'newer_than:3d -in:spam -in:trash -label:"[FPD] Intake" {floorplan "floor plan" "site plan" "sq ft" "square feet" matterport "new request" "new job" "quick quote" "quote for this property" "could you give us a quote" measure listing}';
+// A reply can arrive in a thread that already has the intake label. Gmail
+// does not reliably copy conversation labels onto later messages, so keep a
+// small second query that searches recent, explicit quote requests without a
+// label restriction. The heuristic below still decides whether a Job is
+// eligible; this query only makes the message visible to that gate.
+const GMAIL_EXISTING_THREAD_REPLY_QUERY = 'newer_than:3d -in:spam -in:trash {"could you give us a quote" "quote for this property" "please quote" "please provide a quote"}';
 
 async function autoLabelGmailIntake(client) {
   const config = client && client.config;
   if (!gmailAutoLabelEnabled()) return { enabled: false, labeled: [], skipped: [], errors: [] };
   if (!client || !config || !config.intakeLabelId) return { enabled: true, labeled: [], skipped: [], errors: ["Gmail intake label is not configured"] };
   const query = config.autoLabelQuery || DEFAULT_GMAIL_AUTO_LABEL_QUERY;
-  const listed = await client.listMessages({ labelId: "", query, maxResults: config.autoLabelMaxResults || 50 });
+  const queries = [...new Set([query, GMAIL_EXISTING_THREAD_REPLY_QUERY])];
+  const listedMessages = [];
+  const errors = [];
+  for (const searchQuery of queries) {
+    try {
+      const listed = await client.listMessages({ labelId: "", query: searchQuery, maxResults: config.autoLabelMaxResults || 50 });
+      listedMessages.push(...(listed.messages || []));
+    } catch (error) {
+      errors.push({ query: searchQuery, error: error.message });
+    }
+  }
   const seenThreads = new Set();
-  const labeled = [], skipped = [], errors = [];
-  for (const item of listed.messages || []) {
+  const seenMessages = new Set();
+  const labeled = [], skipped = [];
+  for (const item of listedMessages) {
     const id = clean(item && item.id);
-    if (!id) continue;
+    if (!id || seenMessages.has(id)) continue;
+    seenMessages.add(id);
     try {
       const raw = await client.getMessage(id);
       let parsed = parseGmailMessage(raw, { agentEmails: config.agentEmails, clientEmails: config.clientEmails });
@@ -555,7 +573,7 @@ async function autoLabelGmailIntake(client) {
       errors.push({ id, error: error.message });
     }
   }
-  return { enabled: true, query, labeled, skipped, errors, nextPageToken: listed.nextPageToken || "" };
+  return { enabled: true, query: queries.join(" OR "), labeled, skipped, errors, nextPageToken: "" };
 }
 
 async function syncGmailMessageToAirtable(message, project, airtableRecords = []) {
