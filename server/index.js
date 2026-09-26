@@ -203,6 +203,7 @@ function integrationStatus() {
   const smtpReady = isSmtpConfigured();
   return {
     airtable: Boolean(process.env.AIRTABLE_TOKEN && process.env.AIRTABLE_BASE_ID),
+    portalAuthConfigured: Boolean(clean(process.env.PORTAL_USERNAME) && clean(process.env.PORTAL_PASSWORD) && (clean(process.env.PORTAL_SESSION_SECRET) || clean(process.env.INTERNAL_ADMIN_TOKEN))),
     smtp: smtpReady,
     gmailSmtp: Boolean(process.env.SMTP_USER && process.env.SMTP_APP_PASSWORD),
     gmailApiIntake: isGmailConfigured(),
